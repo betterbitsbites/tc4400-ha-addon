@@ -19,6 +19,7 @@
 #  * Supports MQTT port, and brokers without authentication.
 #  * DRY_RUN=1 prints MQTT messages instead of publishing them.
 #  * Channel loops no longer run in a subshell, so MQTT errors abort properly.
+#  * State messages are retained and empty values become null (valid JSON).
 
 # Optional config file (shell syntax, KEY="value")
 if [ -n "$1" ] && [ -f "$1" ]; then
@@ -175,6 +176,11 @@ else
 	loginStatus "success"
 fi
 
+# Replace empty values (e.g. "snr": ,) with null so the JSON stays valid
+function sanitizeJson() {
+	echo "$1" | sed -E 's/: *,/: null,/g; s/: *}/: null }/g'
+}
+
 # Publish a Home Assistant MQTT discovery config message for one sub-sensor
 # Args: name state_topic infix suffix [suffix_descriptive] [state_class] [unit] [device_class]
 function pubConfigMessage () {
@@ -253,7 +259,8 @@ state_message="${state_message}\"uptime\": \"${uptime}\", "
 state_message="${state_message}\"addr_ipv4\": \"${addr_ipv4}\", "
 state_message="${state_message}\"addr_ipv6\": \"${addr_ipv6}\""
 state_message="{ ${state_message} }"
-mqtt_pub "${state_topic}" "${state_message}" || { echoerr "MQTT error posting modem status to topic ${state_topic}" ; exit 20 ; }
+	state_message=$(sanitizeJson "$state_message")
+mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting modem status to topic ${state_topic}" ; exit 20 ; }
 
 echo "Parsing downstream channels"
 while read -r line; do
@@ -263,7 +270,7 @@ while read -r line; do
 	# $10 profile $11 unerrored $12 corrected $13 uncorrectable
 
 	# Sensor IDs follow the channel ID, independent of the ordering on the page
-	index=$(echo $to_parse | awk '{print $2}')
+	index=$(echo "$to_parse" | awk -F'\t' '{print $2}')
 	state_topic="${mqtt_topic}/downstream${index}"
 
 	echo "Publishing downstream channel ${index}"
@@ -281,21 +288,22 @@ while read -r line; do
 	pubConfigMessage "Down ${index}" ${state_topic} "downstream${index}" "uncorr" "Uncorrectable" "total_increasing" "B" "data_size"
 
 	state_message=""
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"id\": "$2", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"type\": \""$4"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"frequency\": "$6", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"width\": "$7", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"snr\": "$8", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"power\": "$9", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"profile\": \""$10"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"lockstatus\": \""$3"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"bondingstatus\": \""$5"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"noerr\": "$11", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"corr\": "$12", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"uncorr\": "$13 }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"id\": "$2", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"type\": \""$4"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"frequency\": "$6", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"width\": "$7", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"snr\": "$8", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"power\": "$9", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"profile\": \""$10"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"lockstatus\": \""$3"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"bondingstatus\": \""$5"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"noerr\": "$11", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"corr\": "$12", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"uncorr\": "$13 }')"
 	state_message="{ ${state_message} }"
+	state_message=$(sanitizeJson "$state_message")
 
-	mqtt_pub "${state_topic}" "${state_message}" || { echoerr "MQTT error posting downstream channel status to topic ${state_topic}" ; exit 20 ; }
+	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting downstream channel status to topic ${state_topic}" ; exit 20 ; }
 done < <(echo "$downstream_rows" | tail -n +3)
 
 echo "Parsing upstream channels"
@@ -320,17 +328,18 @@ while read -r line; do
 	pubConfigMessage "Up ${index}" ${state_topic} "upstream${index}" "bondingstatus" "Bonding Status"
 
 	state_message=""
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"id\": "$2", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"type\": \""$4"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"frequency\": "$6", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"width\": "$7", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"power\": "$8", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"profile\": \""$9"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"lockstatus\": \""$3"\", " }')"
-	state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"bondingstatus\": \""$5"\"" }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"id\": "$2", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"type\": \""$4"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"frequency\": "$6", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"width\": "$7", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"power\": "$8", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"profile\": \""$9"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"lockstatus\": \""$3"\", " }')"
+	state_message="${state_message}$(echo "$to_parse" | awk -F'\t' '{ print "\"bondingstatus\": \""$5"\"" }')"
 	state_message="{ ${state_message} }"
+	state_message=$(sanitizeJson "$state_message")
 
-	mqtt_pub "${state_topic}" "${state_message}" || { echoerr "MQTT error posting upstream channel status to topic ${state_topic}" ; exit 20 ; }
+	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting upstream channel status to topic ${state_topic}" ; exit 20 ; }
 done < <(echo "$upstream_rows" | tail -n +3)
 
 echo "Done."
