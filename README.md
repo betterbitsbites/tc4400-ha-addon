@@ -86,6 +86,17 @@ Variables: `MODEM_URL`, `MODEM_USERNAME`, `MODEM_PASSWORD`, `MQTT_HOST`, `MQTT_P
 `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_PREFIX`, `MQTT_UID_PREFIX`,
 `MQTT_LOGGING_TOPIC`, `DRY_RUN`.
 
+## Summary sensors and dashboard
+
+Besides one sensor set per channel, the scraper publishes **Summary** sensors across
+all channels: number of downstream/upstream channels and how many are locked, worst
+and average downstream SNR, downstream power range, upstream power range, and total
+corrected/uncorrectable errors.
+
+A ready-made dashboard using only built-in cards is in
+[`examples/dashboard.yaml`](examples/dashboard.yaml): create a new dashboard, open the
+raw configuration editor and paste the file.
+
 ## MQTT topics
 
 `XXXX` = modem serial number.
@@ -94,6 +105,7 @@ Variables: `MODEM_URL`, `MODEM_USERNAME`, `MODEM_PASSWORD`, `MQTT_HOST`, `MQTT_P
 - `homeassistant/sensor/cablemodemXXXX/status` — general modem status
 - `homeassistant/sensor/cablemodemXXXX/downstreamN` — downstream channel ID `N`
 - `homeassistant/sensor/cablemodemXXXX/upstreamN` — upstream channel `N`
+- `homeassistant/sensor/cablemodemXXXX/summary` — aggregates across all channels
 
 ## Exit codes
 

@@ -20,6 +20,8 @@
 #  * DRY_RUN=1 prints MQTT messages instead of publishing them.
 #  * Channel loops no longer run in a subshell, so MQTT errors abort properly.
 #  * State messages are retained and empty values become null (valid JSON).
+#  * Summary sensors across all channels (min/avg SNR, power range, error totals,
+#    locked channel counts).
 
 # Optional config file (shell syntax, KEY="value")
 if [ -n "$1" ] && [ -f "$1" ]; then
@@ -263,6 +265,8 @@ state_message="{ ${state_message} }"
 mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting modem status to topic ${state_topic}" ; exit 20 ; }
 
 echo "Parsing downstream channels"
+sum_down=""
+sum_up=""
 while read -r line; do
 	[ -z "$line" ] && continue
 	to_parse=$(echo "$line" | sed 's/<th[^>]*>[^<]*<\/th><\/tr>//g;s/^<td>//g;s/<\/td>$//g;s/<\/td><td[^>]*>/\t/g')
@@ -272,6 +276,7 @@ while read -r line; do
 	# Sensor IDs follow the channel ID, independent of the ordering on the page
 	index=$(echo "$to_parse" | awk -F'\t' '{print $2}')
 	state_topic="${mqtt_topic}/downstream${index}"
+	sum_down+="$(echo "$to_parse" | awk -F'\t' '{ print $3"\t"$8"\t"$9"\t"$12"\t"$13 }')"$'\n'
 
 	echo "Publishing downstream channel ${index}"
 	pubConfigMessage "Down ${index}" ${state_topic} "downstream${index}" "id" "ID"
@@ -316,6 +321,7 @@ while read -r line; do
 
 	index=${counter}
 	state_topic="${mqtt_topic}/upstream${index}"
+	sum_up+="$(echo "$to_parse" | awk -F'\t' '{ print $3"\t"$8 }')"$'\n'
 
 	echo "Publishing upstream channel ${index}"
 	pubConfigMessage "Up ${index}" ${state_topic} "upstream${index}" "id" "ID"
@@ -341,5 +347,48 @@ while read -r line; do
 
 	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting upstream channel status to topic ${state_topic}" ; exit 20 ; }
 done < <(echo "$upstream_rows" | tail -n +3)
+
+###########################################
+# Step 3: Summary across all channels     #
+###########################################
+echo "Publishing summary"
+state_topic="${mqtt_topic}/summary"
+pubConfigMessage "Summary" ${state_topic} "summary" "down_channels" "Downstream Channels" "measurement"
+pubConfigMessage "Summary" ${state_topic} "summary" "down_locked" "Downstream Locked" "measurement"
+pubConfigMessage "Summary" ${state_topic} "summary" "snr_min" "Downstream SNR Min" "measurement" "dB" "signal_strength"
+pubConfigMessage "Summary" ${state_topic} "summary" "snr_avg" "Downstream SNR Avg" "measurement" "dB" "signal_strength"
+pubConfigMessage "Summary" ${state_topic} "summary" "down_power_min" "Downstream Power Min" "measurement" "dBmV"
+pubConfigMessage "Summary" ${state_topic} "summary" "down_power_max" "Downstream Power Max" "measurement" "dBmV"
+pubConfigMessage "Summary" ${state_topic} "summary" "corr" "Corrected Total" "total_increasing"
+pubConfigMessage "Summary" ${state_topic} "summary" "uncorr" "Uncorrectable Total" "total_increasing"
+pubConfigMessage "Summary" ${state_topic} "summary" "up_channels" "Upstream Channels" "measurement"
+pubConfigMessage "Summary" ${state_topic} "summary" "up_locked" "Upstream Locked" "measurement"
+pubConfigMessage "Summary" ${state_topic} "summary" "up_power_min" "Upstream Power Min" "measurement" "dBmV"
+pubConfigMessage "Summary" ${state_topic} "summary" "up_power_max" "Upstream Power Max" "measurement" "dBmV"
+
+# Numeric aggregates; fields that are empty or non-numeric are skipped
+state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
+	function num(x) { return x ~ /^-?[0-9]+(\.[0-9]+)?$/ }
+	function v(x)   { return x == "" ? "null" : x }
+	NF >= 3 {
+		dn++; if ($1 == "Locked") dl++
+		if (num($2)) { s += $2; sn++; if (smin == "" || $2 < smin) smin = $2 }
+		if (num($3)) { if (pmin == "" || $3 < pmin) pmin = $3; if (pmax == "" || $3 > pmax) pmax = $3 }
+		if (num($4)) c += $4
+		if (num($5)) u += $5
+	}
+	END {
+		n = split(up, lines, "\n")
+		for (i = 1; i <= n; i++) {
+			if (lines[i] == "") continue
+			split(lines[i], f, "\t"); un++; if (f[1] == "Locked") ul++
+			if (num(f[2])) { if (upmin == "" || f[2] < upmin) upmin = f[2]; if (upmax == "" || f[2] > upmax) upmax = f[2] }
+		}
+		avg = sn ? sprintf("%.1f", s / sn) : ""
+		printf "{ \"down_channels\": %d, \"down_locked\": %d, \"snr_min\": %s, \"snr_avg\": %s, ", dn, dl, v(smin), v(avg)
+		printf "\"down_power_min\": %s, \"down_power_max\": %s, \"corr\": %d, \"uncorr\": %d, ", v(pmin), v(pmax), c, u
+		printf "\"up_channels\": %d, \"up_locked\": %d, \"up_power_min\": %s, \"up_power_max\": %s }", un, ul, v(upmin), v(upmax)
+	}')
+mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting summary to topic ${state_topic}" ; exit 20 ; }
 
 echo "Done."

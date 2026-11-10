@@ -1,0 +1,192 @@
+# TC4400 cable modem dashboard (built-in cards only, sections view)
+#
+# Use: Settings -> Dashboards -> Add dashboard -> "New dashboard from scratch",
+# open it, pencil icon -> three dots -> "Raw configuration editor", replace all
+# content with this file and save.
+#
+# Entity IDs assume the device is named "TC4400" (default). If yours differ,
+# check them under Settings -> Devices -> TC4400.
+#
+# Thresholds are rough rules of thumb for DOCSIS 3.0/3.1 (256QAM downstream):
+#   Downstream SNR   >= 36 dB good, 33-36 marginal, < 33 bad
+#   Downstream power about -7..+7 dBmV ideal, up to about +-15 tolerable
+#   Upstream power   up to ~47 dBmV good, 47-51 high, > 51 bad
+title: Cable modem
+views:
+  - title: TC4400
+    path: tc4400
+    icon: mdi:router-network
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Status
+            heading_style: title
+          - type: tile
+            entity: sensor.tc4400_modem_connectivity_state
+            name: Connectivity
+          - type: tile
+            entity: sensor.tc4400_modem_uptime
+            name: Uptime
+          - type: tile
+            entity: sensor.tc4400_summary_downstream_locked
+            name: Downstream locked
+            icon: mdi:download-network
+          - type: tile
+            entity: sensor.tc4400_summary_upstream_locked
+            name: Upstream locked
+            icon: mdi:upload-network
+          - type: tile
+            entity: sensor.tc4400_summary_uncorrectable_total
+            name: Uncorrectable total
+            icon: mdi:alert-circle-outline
+          - type: tile
+            entity: sensor.tc4400_summary_corrected_total
+            name: Corrected total
+            icon: mdi:check-circle-outline
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Signal now
+            heading_style: title
+          - type: gauge
+            entity: sensor.tc4400_summary_downstream_snr_min
+            name: Downstream SNR (worst)
+            min: 25
+            max: 45
+            needle: true
+            severity:
+              red: 0
+              yellow: 33
+              green: 36
+          - type: gauge
+            entity: sensor.tc4400_summary_upstream_power_max
+            name: Upstream power (highest)
+            min: 30
+            max: 55
+            needle: true
+            severity:
+              green: 0
+              yellow: 47
+              red: 51
+          - type: gauge
+            entity: sensor.tc4400_summary_downstream_power_min
+            name: Downstream power min
+            min: -20
+            max: 20
+            needle: true
+            segments:
+              - from: -20
+                color: var(--error-color)
+              - from: -15
+                color: var(--warning-color)
+              - from: -7
+                color: var(--success-color)
+              - from: 7
+                color: var(--warning-color)
+              - from: 15
+                color: var(--error-color)
+          - type: gauge
+            entity: sensor.tc4400_summary_downstream_power_max
+            name: Downstream power max
+            min: -20
+            max: 20
+            needle: true
+            segments:
+              - from: -20
+                color: var(--error-color)
+              - from: -15
+                color: var(--warning-color)
+              - from: -7
+                color: var(--success-color)
+              - from: 7
+                color: var(--warning-color)
+              - from: 15
+                color: var(--error-color)
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Upstream (upload)
+            heading_style: title
+          - type: history-graph
+            title: Upstream transmit power per channel
+            hours_to_show: 48
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.tc4400_up_1_power
+                name: Up 1
+              - entity: sensor.tc4400_up_2_power
+                name: Up 2
+              - entity: sensor.tc4400_up_3_power
+                name: Up 3
+              - entity: sensor.tc4400_up_4_power
+                name: Up 4
+          - type: history-graph
+            title: Locked upstream channels
+            hours_to_show: 168
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.tc4400_summary_upstream_locked
+                name: Locked
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Downstream (download)
+            heading_style: title
+          - type: history-graph
+            title: SNR (worst and average of all channels)
+            hours_to_show: 48
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.tc4400_summary_downstream_snr_min
+                name: Worst
+              - entity: sensor.tc4400_summary_downstream_snr_avg
+                name: Average
+          - type: history-graph
+            title: Receive power range
+            hours_to_show: 48
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.tc4400_summary_downstream_power_min
+                name: Min
+              - entity: sensor.tc4400_summary_downstream_power_max
+                name: Max
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Errors
+            heading_style: title
+          - type: statistics-graph
+            title: Uncorrectable errors per hour
+            chart_type: bar
+            period: hour
+            days_to_show: 3
+            stat_types:
+              - change
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.tc4400_summary_uncorrectable_total
+                name: Uncorrectable
+          - type: statistics-graph
+            title: Corrected errors per day
+            chart_type: bar
+            period: day
+            days_to_show: 30
+            stat_types:
+              - change
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.tc4400_summary_corrected_total
+                name: Corrected
