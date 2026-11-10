@@ -2,6 +2,20 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.3.0 — 2026-11-10
+
+### Added
+- **Internet latency probe**: pings configurable targets (default `1.1.1.1`) via
+  ICMP, with automatic TCP fallback, and publishes average, P95, min, max,
+  jitter, loss, base latency, congestion threshold and a status (Line clear /
+  Unstable / Congested / Packet loss / Down) per window, as a new
+  *Internet Latency* device. New options `latency_*`.
+- Dashboard: **Internet latency** section with a status line per target and a
+  chart with min–max shading, average, base latency and congestion threshold.
+
+### Changed
+- Dashboard: the modem TCP latency section is now called *Modem latency*.
+
 ## 1.2.0 — 2026-11-10
 
 ### Added

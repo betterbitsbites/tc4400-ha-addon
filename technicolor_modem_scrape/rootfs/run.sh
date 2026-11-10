@@ -50,6 +50,17 @@ dashboard_listener() {
 }
 dashboard_listener &
 
+# Internet latency probe (pings the configured targets, publishes rolling stats)
+if bashio::config.true 'latency_enabled'; then
+    (
+        while true; do
+            python3 /usr/bin/latency_probe.py 2>&1 | while IFS= read -r line; do bashio::log.info "${line}"; done
+            bashio::log.warning "Latency probe stopped, restarting in 30 s"
+            sleep 30
+        done
+    ) &
+fi
+
 while true; do
     if output="$(/usr/bin/technicolor_signal_dump.sh 2>&1)"; then
         if bashio::config.true 'verbose'; then

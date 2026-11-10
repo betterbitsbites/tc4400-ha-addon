@@ -92,8 +92,8 @@ Variables: `MODEM_URL`, `MODEM_USERNAME`, `MODEM_PASSWORD`, `MQTT_HOST`, `MQTT_P
 ## Dashboard
 
 The app adds a **Create Dashboard** button to the TC4400 device. One press builds a
-complete dashboard: status, gauges, a Fritz!Box-style channel spectrum, a channel
-table, upstream/downstream charts with coloured good/warning/bad ranges, errors and
+complete dashboard: status, gauges, internet latency, a Fritz!Box-style channel
+spectrum, a channel table, upstream/downstream charts with coloured good/warning/bad ranges, errors and
 latency. It uses the optional cards *Plotly Graph Card* and *ApexCharts Card* when
 they are installed and falls back to built-in cards otherwise. Details, options and
 how to call it as an action: [app documentation](technicolor_modem_scrape/DOCS.md#dashboard).
@@ -101,7 +101,8 @@ how to call it as an action: [app documentation](technicolor_modem_scrape/DOCS.m
 Besides one sensor set per channel, the scraper publishes **Summary** sensors across
 all channels (locked channel counts, worst/average SNR, power ranges, error totals and
 errors per minute), TCP latency, last boot time, and the full channel lists as
-attributes. A static example dashboard with built-in cards only is in
+attributes. An **internet latency probe** (default target `1.1.1.1`) adds average,
+P95, min/max, jitter, loss, base latency and a congestion status per target. A static example dashboard with built-in cards only is in
 [`examples/dashboard.yaml`](examples/dashboard.yaml).
 
 ## MQTT topics

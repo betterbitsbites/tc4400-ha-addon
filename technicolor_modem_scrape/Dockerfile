@@ -11,6 +11,6 @@ LABEL org.opencontainers.image.title="Technicolor TC4400 Modem Scraper" \
 RUN apk add --no-cache bash curl gawk sed coreutils mosquitto-clients python3
 
 COPY rootfs /
-RUN chmod a+x /run.sh /usr/bin/technicolor_signal_dump.sh /usr/bin/tc4400_dashboard.py
+RUN chmod a+x /run.sh /usr/bin/technicolor_signal_dump.sh /usr/bin/tc4400_dashboard.py /usr/bin/latency_probe.py
 
 CMD [ "/run.sh" ]

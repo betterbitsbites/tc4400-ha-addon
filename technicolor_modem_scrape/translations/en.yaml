@@ -36,3 +36,21 @@ configuration:
     description: auto = use plotly-graph / apexcharts-card if installed, builtin = only built-in cards, hacs = always use them
   dashboard_hours:
     name: Dashboard time range (hours)
+  latency_enabled:
+    name: Internet latency probe
+    description: Continuously ping the targets below and publish latency, jitter, loss and a status
+  latency_targets:
+    name: Latency targets
+    description: IP addresses or host names to ping (default 1.1.1.1, Cloudflare)
+  latency_interval:
+    name: Probe interval (seconds)
+  latency_window:
+    name: Statistics window (seconds)
+    description: Average/P95/min/max/jitter/loss are calculated and published once per window
+  latency_threshold:
+    name: Congestion threshold (ms above base latency)
+  latency_method:
+    name: Probe method
+    description: auto = ICMP ping, TCP connect if ICMP is not possible; icmp; tcp
+  latency_tcp_port:
+    name: TCP port for the TCP method

@@ -33,6 +33,13 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 | `dashboard_url` | `cable-modem` | URL of the generated dashboard (must contain a hyphen). **An existing dashboard with this URL is overwritten.** |
 | `dashboard_cards` | `auto` | `auto`: use plotly-graph / apexcharts-card if installed; `builtin`: only built-in cards; `hacs`: always use them |
 | `dashboard_hours` | `48` | Time range of the charts |
+| `latency_enabled` | `true` | Run the internet latency probe |
+| `latency_targets` | `1.1.1.1` | IP addresses or host names to ping (one entry each) |
+| `latency_interval` | `1` | Seconds between probes per target |
+| `latency_window` | `10` | Seconds per statistics window (= how often values are published) |
+| `latency_threshold` | `30` | ms above base latency that counts as congestion |
+| `latency_method` | `auto` | `auto`: ICMP ping, TCP connect if ICMP isn't possible; `icmp`; `tcp` |
+| `latency_tcp_port` | `443` | Port for the TCP method |
 
 ## Sensors
 
@@ -46,6 +53,28 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 - **Downstream / Upstream Channel List**: number of channels, with all channels
   as the `channels` attribute (used by the dashboard's spectrum charts and tables)
 - **Create Dashboard** (button): builds the dashboard, see below
+- **Internet Latency** device: one sensor set per latency target, see below
+
+## Internet latency
+
+The app pings each target in `latency_targets` (default `1.1.1.1`, Cloudflare)
+every `latency_interval` seconds and publishes, per `latency_window`:
+
+| Sensor | Meaning |
+|---|---|
+| Average, P95, Min, Max | Round-trip time over the window |
+| Jitter | Average difference between consecutive round trips |
+| Loss | Lost probes in % |
+| Base Latency | 10th percentile of the last 15 minutes — the "idle" latency of the line |
+| Congestion Threshold | Base latency + `latency_threshold` |
+| Status | **Line clear**, **Unstable** (one loss, or P95 above the threshold), **Congested** (average above the threshold), **Packet loss** (> 10 % lost), **Down** (no replies) |
+
+All values are also attributes of the *Status* sensor. ICMP needs raw sockets;
+if they aren't available the probe falls back to a TCP connect to
+`latency_tcp_port` and the attribute `method` shows `tcp`.
+
+With the default 10 s window each target writes about 9 values every 10 s to the
+recorder. For a smaller database use a larger window (e.g. 30 or 60 s).
 
 ## Dashboard
 
@@ -62,11 +91,12 @@ unique ID, so renamed entities and other modem integrations don't get in the way
 |---|---|---|
 | Status | Connectivity, DOCSIS, uptime, last boot, latency, locked channels, errors | same |
 | Signal now | Gauges: worst SNR, highest upstream power, downstream power range | same |
+| Internet latency | Status line per target (average, P95, min/max, jitter, loss) and history graph | Chart with min–max shading, average, base latency and congestion threshold (*apexcharts-card*) |
 | Channels (spectrum) | – | Fritz!Box-style bars per channel along the frequency band: downstream power, downstream SNR, upstream power — coloured green/yellow/red (*plotly-graph*) |
 | Channel table | Table of all channels with 🟢🟡🔴 markers | same |
 | Upstream / Downstream | History graphs | Charts with coloured good/warning/bad ranges (*apexcharts-card*) |
 | Errors | Corrected/uncorrectable per hour/day | Columns per hour (*apexcharts-card*) |
-| Latency | History graph | Chart (*apexcharts-card*) |
+| Modem latency | History graph | Chart (*apexcharts-card*) |
 
 **Optional extra cards** — install from the Marketplace / HACS (*Dashboard*
 category), then press *Create Dashboard* again:
@@ -90,12 +120,15 @@ data:
   topic: tc4400_scraper/dashboard/create
   payload: >-
     {"title": "Cable modem", "url_path": "cable-modem", "cards": "auto",
-    "hours": 24, "include": {"spectrum": true, "channel_table": true,
+    "hours": 24, "latency_hours": 3, "include": {"internet": true,
+    "spectrum": true, "channel_table": true,
     "upstream": true, "downstream": true, "errors": true, "latency": false}}
 ```
 
-All keys are optional. `include` accepts `status`, `gauges`, `spectrum`,
-`channel_table`, `upstream`, `downstream`, `errors`, `latency`. With several modems
+All keys are optional. `include` accepts `status`, `gauges`, `internet`,
+`spectrum`, `channel_table`, `upstream`, `downstream`, `errors`, `latency`
+(modem latency). `latency_hours` (default 3) is the time range of the internet
+latency charts. With several modems
 add `"serial": "<serial number>"`.
 
 The colour thresholds are rough DOCSIS rules of thumb (256QAM): downstream power

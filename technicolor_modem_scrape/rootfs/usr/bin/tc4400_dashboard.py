@@ -10,8 +10,8 @@ PAYLOAD is what was published to the dashboard command topic:
   * empty or a modem serial number (the "Create Dashboard" button), or
   * a JSON object with any of these keys (missing keys use the app options):
       {"title": "Cable modem", "url_path": "cable-modem", "cards": "auto",
-       "hours": 48, "serial": "CP1234ABC",
-       "include": {"status": true, "gauges": true, "spectrum": true,
+       "hours": 48, "latency_hours": 3, "serial": "CP1234ABC",
+       "include": {"status": true, "gauges": true, "internet": true, "spectrum": true,
                    "channel_table": true, "upstream": true, "downstream": true,
                    "errors": true, "latency": true}}
 
@@ -32,7 +32,7 @@ import sys
 from urllib.parse import urlparse
 
 OPTIONS_FILE = "/data/options.json"
-SECTIONS = ("status", "gauges", "spectrum", "channel_table", "upstream",
+SECTIONS = ("status", "gauges", "internet", "spectrum", "channel_table", "upstream",
             "downstream", "errors", "latency")
 
 # Rough DOCSIS rules of thumb (256QAM downstream). Used for colours and bands.
@@ -171,6 +171,7 @@ def load_settings(payload):
         "url_path": opts.get("dashboard_url", "cable-modem"),
         "cards": opts.get("dashboard_cards", "auto"),
         "hours": int(opts.get("dashboard_hours", 48)),
+        "latency_hours": 3,
         "uid_prefix": os.environ.get("MQTT_UID_PREFIX") or opts.get("mqtt_uid_prefix", "cablemodem"),
         "serial": None,
         "include": {s: True for s in SECTIONS},
@@ -181,7 +182,7 @@ def load_settings(payload):
             req = json.loads(payload)
         except ValueError as e:
             raise ValueError("payload is not valid JSON: %s" % e)
-        for key in ("title", "url_path", "cards", "hours", "serial"):
+        for key in ("title", "url_path", "cards", "hours", "latency_hours", "serial"):
             if key in req and req[key] not in (None, ""):
                 settings[key] = req[key]
         for key, value in (req.get("include") or {}).items():
@@ -190,6 +191,7 @@ def load_settings(payload):
     elif payload and payload.lower() not in ("press", "create", "{}"):
         settings["serial"] = payload
     settings["hours"] = max(1, min(int(settings["hours"]), 720))
+    settings["latency_hours"] = max(1, min(int(settings["latency_hours"]), 48))
     if settings["cards"] not in ("auto", "builtin", "hacs"):
         raise ValueError("cards must be auto, builtin or hacs")
     url = str(settings["url_path"]).strip().lower()
@@ -222,6 +224,21 @@ def find_entities(registry, uid_prefix, serial=None):
         return serial, modems[serial]
     serial = max(modems, key=lambda s: len(modems[s]))
     return serial, modems[serial]
+
+
+def find_latency(registry):
+    """{target slug: {key: entity_id}} for the internet latency probe."""
+    pattern = re.compile(r"^inetlat_(?P<slug>\w+?)_(?P<key>status|avg|p95|min|max|jitter|loss|base|threshold)$")
+    targets = {}
+    for e in registry:
+        if e.get("platform") != "mqtt" or e.get("disabled_by"):
+            continue
+        m = pattern.match(e.get("unique_id") or "")
+        if m:
+            targets.setdefault(m.group("slug"), {})[m.group("key")] = e["entity_id"]
+    def natural(s):  # 1_1_1_1 before 193_99_144_80
+        return [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in s.split("_")]
+    return {s: targets[s] for s in sorted(targets, key=natural) if "avg" in targets[s]}
 
 
 class Entities:
@@ -369,10 +386,58 @@ def channel_table(title, entity, upstream=False):
     return full({"type": "markdown", "title": title, "content": content})
 
 
+def latency_summary(title, keys):
+    """One line like the pfSense latency header, from the status sensor's attributes."""
+    st = keys.get("status")
+    if not st:
+        return None
+    content = (
+        "{%- set e = '" + st + "' -%}\n"
+        "{%- set s = states(e) -%}\n"
+        "{%- macro v(k, u) -%}{% set x = state_attr(e, k) %}{{ x if x is number else '–' }}{{ u }}{%- endmacro -%}\n"
+        "{{ {'Line clear': '🟢', 'Unstable': '🟡', 'Congested': '🟠', 'Packet loss': '🔴', 'Down': '⛔'}.get(s, '⚪') }} "
+        "**{{ s }}** · last {{ state_attr(e, 'window_s') or '–' }} s: average **{{ v('avg', ' ms') }}** · "
+        "P95 **{{ v('p95', ' ms') }}** · Min/Max **{{ v('min', '') }} / {{ v('max', ' ms') }}** · "
+        "Jitter **{{ v('jitter', ' ms') }}** · Loss **{{ v('loss', ' %') }}**  \n"
+        "<small>Base latency {{ v('base', ' ms') }} · congestion threshold {{ v('threshold', ' ms') }} · "
+        "via {{ state_attr(e, 'method') or '–' }}</small>"
+    )
+    return full({"type": "markdown", "title": title, "content": content})
+
+
+def apex_latency(title, keys, hours):
+    """pfSense-style chart: min-max shading, average, base latency and congestion threshold."""
+    series = []
+    if keys.get("max"):
+        series.append({"entity": keys["max"], "name": "Max", "type": "area", "color": "#e57373",
+                       "opacity": 0.25, "stroke_width": 0, "curve": "straight", "show": {"in_header": False}})
+    if keys.get("min"):
+        series.append({"entity": keys["min"], "name": "Min", "type": "line", "color": "#e57373",
+                       "opacity": 0.6, "stroke_width": 1, "curve": "straight", "show": {"in_header": False}})
+    series.append({"entity": keys["avg"], "name": "Average", "type": "line", "color": "#ef5350",
+                   "stroke_width": 2, "curve": "straight"})
+    if keys.get("base"):
+        series.append({"entity": keys["base"], "name": "Base latency", "type": "line", "color": "#26a69a",
+                       "stroke_width": 2, "stroke_dash": 4, "curve": "stepline"})
+    if keys.get("threshold"):
+        series.append({"entity": keys["threshold"], "name": "Congestion threshold", "type": "line",
+                       "color": "#f9a825", "stroke_width": 2, "stroke_dash": 4, "curve": "stepline"})
+    for k, name in (("p95", "P95"), ("jitter", "Jitter"), ("loss", "Loss")):
+        if keys.get(k):
+            series.append({"entity": keys[k], "name": name, "show": {"in_chart": False}})
+    return full({
+        "type": "custom:apexcharts-card",
+        "graph_span": "%dh" % hours,
+        "header": {"show": True, "title": title, "show_states": True, "colorize_states": True},
+        "yaxis": [{"min": 0, "decimals": 0}],
+        "series": series,
+    })
+
+
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
-def build_dashboard(ent, settings, have_plotly, have_apex):
+def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
     inc, hours = settings["include"], settings["hours"]
     sections = []
 
@@ -422,6 +487,20 @@ def build_dashboard(ent, settings, have_plotly, have_apex):
         if E("summary", "down_power_max"):
             cards.append(gauge(E("summary", "down_power_max"), "DS power max", -20, 20, segments=ds_segments))
         section("Signal now", cards)
+
+    if inc["internet"] and latency:
+        cards = []
+        lh = settings["latency_hours"]
+        for slug, keys in latency.items():
+            name = slug.replace("_", ".")
+            cards.append(latency_summary("Internet latency %s" % name, keys))
+            if have_apex:
+                cards.append(apex_latency("Latency %s" % name, keys, lh))
+            else:
+                s = [(keys[k], n) for k, n in (("avg", "Average"), ("max", "Max"), ("base", "Base latency"),
+                                              ("threshold", "Congestion threshold")) if keys.get(k)]
+                cards.append(history("Latency %s" % name, s, lh))
+        section("Internet latency", cards)
 
     if inc["spectrum"] and have_plotly and ds_list:
         ds_power_color = ("Math.abs(c.power) > %d ? '%s' : (Math.abs(c.power) > %d ? '%s' : '%s')"
@@ -482,8 +561,8 @@ def build_dashboard(ent, settings, have_plotly, have_apex):
 
     if inc["latency"] and E("status", "latency"):
         s = [(E("status", "latency"), "TCP")]
-        section("Latency", [apex_line("TCP latency to the modem", s, hours, ymin=0)
-                            if have_apex else history("TCP latency to the modem", s, hours)])
+        section("Modem latency", [apex_line("TCP latency to the modem", s, hours, ymin=0)
+                                  if have_apex else history("TCP latency to the modem", s, hours)])
 
     return {
         "title": settings["title"],
@@ -510,18 +589,19 @@ def main(argv):
 
     ha = HomeAssistant(url, token)
     try:
-        serial, mapping = find_entities(ha.call("config/entity_registry/list"),
-                                        settings["uid_prefix"], settings["serial"])
+        registry = ha.call("config/entity_registry/list")
+        serial, mapping = find_entities(registry, settings["uid_prefix"], settings["serial"])
+        latency = find_latency(registry)
         ent = Entities(mapping)
         have_plotly, have_apex = installed_cards(ha)
         if settings["cards"] == "builtin":
             have_plotly = have_apex = False
         elif settings["cards"] == "hacs":
             have_plotly = have_apex = True
-        log("Modem %s: %d entities; plotly-graph %s, apexcharts-card %s" % (
-            serial, len(mapping), "yes" if have_plotly else "no", "yes" if have_apex else "no"))
+        log("Modem %s: %d entities, %d latency target(s); plotly-graph %s, apexcharts-card %s" % (
+            serial, len(mapping), len(latency), "yes" if have_plotly else "no", "yes" if have_apex else "no"))
 
-        config = build_dashboard(ent, settings, have_plotly, have_apex)
+        config = build_dashboard(ent, settings, have_plotly, have_apex, latency)
 
         url_path = settings["url_path"]
         dashboards = ha.call("lovelace/dashboards/list") or []
