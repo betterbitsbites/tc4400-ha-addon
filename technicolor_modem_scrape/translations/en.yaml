@@ -1,0 +1,27 @@
+configuration:
+  modem_url:
+    name: Modem URL
+    description: Web interface of the modem, normally http://192.168.100.1
+  modem_username:
+    name: Modem username
+  modem_password:
+    name: Modem password
+    description: Default on the TC4400 is bEn2o#US9s
+  scan_interval:
+    name: Scan interval (seconds)
+  mqtt_host:
+    name: MQTT host (optional)
+    description: Leave empty to use the Mosquitto add-on automatically
+  mqtt_port:
+    name: MQTT port (optional)
+  mqtt_username:
+    name: MQTT username (optional)
+  mqtt_password:
+    name: MQTT password (optional)
+  mqtt_topic_prefix:
+    name: MQTT discovery topic prefix
+  mqtt_uid_prefix:
+    name: Unique ID prefix
+  verbose:
+    name: Verbose log
+    description: Log the full scraper output on every run
