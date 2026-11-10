@@ -45,8 +45,11 @@ Mosquitto add-on. To use a different broker, fill in `mqtt_host` (and port/user/
 | `mqtt_uid_prefix` | `cablemodem` | |
 | `verbose` | `false` | log full scraper output each run |
 
-> The modem must be reachable from Home Assistant. If it sits behind a router/firewall
-> (e.g. pfSense), make sure HA can reach 192.168.100.1 (route/NAT on the WAN interface).
+> The modem must be reachable from Home Assistant. Behind a router/firewall this
+> usually needs a virtual IP + outbound NAT rule on the WAN interface — step-by-step for
+> pfSense, OPNsense and OpenWrt in [the app documentation](technicolor_modem_scrape/DOCS.md#reaching-the-modem-through-your-router).
+>
+> Release notes: [CHANGELOG](technicolor_modem_scrape/CHANGELOG.md)
 
 ---
 
