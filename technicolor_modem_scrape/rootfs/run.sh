@@ -30,6 +30,26 @@ fi
 
 bashio::log.info "Modem: ${MODEM_URL} | MQTT: ${MQTT_HOST}:${MQTT_PORT} | every ${interval}s"
 
+# Dashboard generator: listens for the "Create Dashboard" button (or mqtt.publish)
+export DASHBOARD_COMMAND_TOPIC="tc4400_scraper/dashboard/create"
+dashboard_listener() {
+    local auth=()
+    [ -n "${MQTT_USERNAME}" ] && auth+=(-u "${MQTT_USERNAME}")
+    [ -n "${MQTT_PASSWORD}" ] && auth+=(-P "${MQTT_PASSWORD}")
+    while true; do
+        # -R: ignore retained messages, so a dashboard is only built on request
+        mosquitto_sub -R -h "${MQTT_HOST}" -p "${MQTT_PORT}" "${auth[@]}" -t "${DASHBOARD_COMMAND_TOPIC}" |
+        while IFS= read -r payload; do
+            bashio::log.info "Dashboard requested"
+            python3 /usr/bin/tc4400_dashboard.py "${payload}" 2>&1 |
+                while IFS= read -r line; do bashio::log.info "[dashboard] ${line}"; done
+        done
+        bashio::log.warning "Dashboard listener lost the MQTT connection, retrying in 30 s"
+        sleep 30
+    done
+}
+dashboard_listener &
+
 while true; do
     if output="$(/usr/bin/technicolor_signal_dump.sh 2>&1)"; then
         if bashio::config.true 'verbose'; then

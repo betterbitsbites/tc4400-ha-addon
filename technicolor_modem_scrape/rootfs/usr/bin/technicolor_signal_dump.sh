@@ -22,6 +22,8 @@
 #  * State messages are retained and empty values become null (valid JSON).
 #  * Summary sensors across all channels (min/avg SNR, power range, error totals,
 #    locked channel counts).
+#  * TCP latency, last boot timestamp, uptime in seconds, DOCSIS/software version,
+#    error rates per minute, channel lists as attributes, optional dashboard button.
 
 # Optional config file (shell syntax, KEY="value")
 if [ -n "$1" ] && [ -f "$1" ]; then
@@ -82,8 +84,15 @@ function loginStatus () {
 }
 
 function fetchPage () {
-	result=$(curl --connect-timeout 20 -s "${modem_url}/$1" -H 'Accept: */*' -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8' -H "Authorization: Basic ${auth_hash}" -H 'X-Requested-With: XMLHttpRequest' -H 'Cookie: HttpOnly: true, Secure: true') || { echoerr "curl error accessing ${modem_url}/$1" ; exit 22 ; }
+	local raw
+	raw=$(curl --connect-timeout 20 -s -w '\n__TCPMS__%{time_connect}' "${modem_url}/$1" -H 'Accept: */*' -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8' -H "Authorization: Basic ${auth_hash}" -H 'X-Requested-With: XMLHttpRequest' -H 'Cookie: HttpOnly: true, Secure: true') || { echoerr "curl error accessing ${modem_url}/$1" ; exit 22 ; }
+	result=$(echo "$raw" | sed '/^__TCPMS__/d')
+	# TCP connect time in milliseconds
+	latency_ms=$(echo "$raw" | sed -n 's/^__TCPMS__//p' | awk '{ printf "%.1f", $1 * 1000 }')
 }
+
+# JSON string or null
+function jstr() { if [ -n "$1" ]; then echo "\"$1\""; else echo "null"; fi; }
 function getSWInfo ()     { fetchPage "cmswinfo.html"; }
 function getConnStatus () { fetchPage "cmconnectionstatus.html"; }
 
@@ -117,6 +126,7 @@ if [ "$(echo "$result" | grep -c "$title_sw")" == "0" ]; then
 else
 	loginStatus "success"
 fi
+tcp_latency_ms="$latency_ms"
 
 ####################
 # Parse the result #
@@ -139,6 +149,15 @@ mac_address=$(echo $cm_info | awk '{print $8}')
 uptime=$(echo $cm_info | awk '{print $14}' | sed 's/days/d /;s/:/ /g;s/ 0/ /g;')
 addr_ipv4=$(echo $cm_info | awk '{print $18}' | sed 's/IPv4=//;')
 addr_ipv6=$(echo $cm_info | awk '{print $20}' | sed 's/IPv6=//;')
+docsis=$(echo $cm_info | awk '{print $2}' | sed 's/^Docsis/DOCSIS /')
+# Uptime "1days00h:07m:22s" -> seconds, and the boot time derived from it
+uptime_s=$(echo $cm_info | awk '{print $14}' | sed -nE 's/^([0-9]+)days([0-9]+)h:([0-9]+)m:([0-9]+)s$/\1 \2 \3 \4/p' | awk '{ print $1*86400 + $2*3600 + $3*60 + $4 }')
+last_boot=""
+if [ -n "$uptime_s" ]; then
+	# rounded to the minute so the timestamp doesn't jitter between scrapes
+	boot_epoch=$(( ( $(date +%s) - uptime_s + 30 ) / 60 * 60 ))
+	last_boot=$(date -u -d "@${boot_epoch}" +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null)
+fi
 
 echo "Serial number: $serial_number"
 echo "Hardware version: $hw_version"
@@ -146,7 +165,8 @@ echo "Software version: $sw_version"
 echo "Modem MAC Address: $mac_address"
 echo "Modem IPv4 Address: $addr_ipv4"
 echo "Modem IPv6 Address: $addr_ipv6"
-echo "Uptime: $uptime"
+echo "Uptime: $uptime (${uptime_s:-?} s, last boot ${last_boot:-?})"
+echo "DOCSIS: $docsis, TCP latency: ${tcp_latency_ms:-?} ms"
 
 if [ -z "$serial_number" ]; then
 	echoerr "Could not parse the modem serial number - unsupported firmware/page layout?"
@@ -155,6 +175,7 @@ fi
 
 modem_id="$mqtt_uid_prefix$serial_number"
 mqtt_topic="$mqtt_topic_prefix/$modem_id"
+device_json="{ \"identifiers\": [\"${serial_number}\",\"${modem_id}\"], \"manufacturer\": \"Technicolor\", \"model\": \"TC4400\", \"name\": \"TC4400\", \"configuration_url\": \"${modem_url}\", \"hw_version\": \"${hw_version}\", \"sw_version\": \"${sw_version}\", \"connections\": [[\"mac\", \"${mac_address}\"]] }"
 
 #############################
 # Step 2: Connection status #
@@ -184,7 +205,7 @@ function sanitizeJson() {
 }
 
 # Publish a Home Assistant MQTT discovery config message for one sub-sensor
-# Args: name state_topic infix suffix [suffix_descriptive] [state_class] [unit] [device_class]
+# Args: name state_topic infix suffix [suffix_descriptive] [state_class] [unit] [device_class] [attr]
 function pubConfigMessage () {
 	config_name="$1"
 	config_state_topic="$2"
@@ -206,16 +227,9 @@ function pubConfigMessage () {
 	[ -n "${config_device_class}" ] && config_message="${config_message} \"device_class\": \"${config_device_class}\", "
 	[ -n "${config_state_class}" ]  && config_message="${config_message} \"state_class\": \"${config_state_class}\", "
 	[ -n "${config_unit}" ]         && config_message="${config_message} \"unit_of_measurement\": \"${config_unit}\", "
-	config_message="${config_message} \"device\": {"
-	config_message="${config_message} \"identifiers\": [\"${serial_number}\",\"${modem_id}\"], "
-	config_message="${config_message} \"manufacturer\": \"Technicolor\", "
-	config_message="${config_message} \"model\": \"TC4400\", "
-	config_message="${config_message} \"name\": \"TC4400\", "
-	config_message="${config_message} \"configuration_url\": \"${modem_url}\", "
-	config_message="${config_message} \"hw_version\": \"${hw_version}\", "
-	config_message="${config_message} \"sw_version\": \"${sw_version}\", "
-	config_message="${config_message} \"connections\": [[\"mac\", \"${mac_address}\"]]"
-	config_message="${config_message} }"
+	# Optional: attributes from the state topic (used for the channel lists)
+	[ "$9" == "attr" ] && config_message="${config_message} \"json_attributes_topic\": \"${config_state_topic}\", "
+	config_message="${config_message} \"device\": ${device_json}"
 	config_message="{ ${config_message} }"
 
 	# Retained, so the device doesn't disappear when HA restarts
@@ -248,6 +262,11 @@ pubConfigMessage "Modem" ${state_topic} "status" "configfile" "Configuration Fil
 pubConfigMessage "Modem" ${state_topic} "status" "uptime" "Uptime"
 pubConfigMessage "Modem" ${state_topic} "status" "addr_ipv4" "IPv4 Address"
 pubConfigMessage "Modem" ${state_topic} "status" "addr_ipv6" "IPv6 Address"
+pubConfigMessage "Modem" ${state_topic} "status" "uptime_s" "Uptime Seconds" "measurement" "s" "duration"
+pubConfigMessage "Modem" ${state_topic} "status" "last_boot" "Last Boot" "" "" "timestamp"
+pubConfigMessage "Modem" ${state_topic} "status" "latency" "TCP Latency" "measurement" "ms" "duration"
+pubConfigMessage "Modem" ${state_topic} "status" "docsis" "DOCSIS Version"
+pubConfigMessage "Modem" ${state_topic} "status" "sw_version" "Software Version"
 
 state_message=""
 state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"channel\": \""$6"\", " }')"
@@ -259,7 +278,12 @@ state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"secservice\"
 state_message="${state_message}$(echo "$to_parse" | awk '{ print "\"configfile\": \""$15"\", " }')"
 state_message="${state_message}\"uptime\": \"${uptime}\", "
 state_message="${state_message}\"addr_ipv4\": \"${addr_ipv4}\", "
-state_message="${state_message}\"addr_ipv6\": \"${addr_ipv6}\""
+state_message="${state_message}\"addr_ipv6\": \"${addr_ipv6}\", "
+state_message="${state_message}\"uptime_s\": ${uptime_s:-null}, "
+state_message="${state_message}\"last_boot\": $(jstr "$last_boot"), "
+state_message="${state_message}\"latency\": ${tcp_latency_ms:-null}, "
+state_message="${state_message}\"docsis\": $(jstr "$docsis"), "
+state_message="${state_message}\"sw_version\": $(jstr "$sw_version")"
 state_message="{ ${state_message} }"
 	state_message=$(sanitizeJson "$state_message")
 mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting modem status to topic ${state_topic}" ; exit 20 ; }
@@ -267,6 +291,10 @@ mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting
 echo "Parsing downstream channels"
 sum_down=""
 sum_up=""
+ds_list=""
+ds_count=0
+us_list=""
+us_count=0
 while read -r line; do
 	[ -z "$line" ] && continue
 	to_parse=$(echo "$line" | sed 's/<th[^>]*>[^<]*<\/th><\/tr>//g;s/^<td>//g;s/<\/td>$//g;s/<\/td><td[^>]*>/\t/g')
@@ -309,6 +337,8 @@ while read -r line; do
 	state_message=$(sanitizeJson "$state_message")
 
 	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting downstream channel status to topic ${state_topic}" ; exit 20 ; }
+	ds_list+="${ds_list:+, }$(echo "$state_message" | sed -E 's/"noerr": [^,]*, //')"
+	ds_count=$((ds_count+1))
 done < <(echo "$downstream_rows" | tail -n +3)
 
 echo "Parsing upstream channels"
@@ -346,6 +376,8 @@ while read -r line; do
 	state_message=$(sanitizeJson "$state_message")
 
 	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting upstream channel status to topic ${state_topic}" ; exit 20 ; }
+	us_list+="${us_list:+, }$(echo "$state_message" | sed -E "s/^\\{ /{ \"channel\": ${index}, /")"
+	us_count=$((us_count+1))
 done < <(echo "$upstream_rows" | tail -n +3)
 
 ###########################################
@@ -365,6 +397,8 @@ pubConfigMessage "Summary" ${state_topic} "summary" "up_channels" "Upstream Chan
 pubConfigMessage "Summary" ${state_topic} "summary" "up_locked" "Upstream Locked" "measurement"
 pubConfigMessage "Summary" ${state_topic} "summary" "up_power_min" "Upstream Power Min" "measurement" "dBmV"
 pubConfigMessage "Summary" ${state_topic} "summary" "up_power_max" "Upstream Power Max" "measurement" "dBmV"
+pubConfigMessage "Summary" ${state_topic} "summary" "corr_rate" "Corrected per Minute" "measurement" "errors/min"
+pubConfigMessage "Summary" ${state_topic} "summary" "uncorr_rate" "Uncorrectable per Minute" "measurement" "errors/min"
 
 # Numeric aggregates; fields that are empty or non-numeric are skipped
 state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
@@ -389,6 +423,36 @@ state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
 		printf "\"down_power_min\": %s, \"down_power_max\": %s, \"corr\": %d, \"uncorr\": %d, ", v(pmin), v(pmax), c, u
 		printf "\"up_channels\": %d, \"up_locked\": %d, \"up_power_min\": %s, \"up_power_max\": %s }", un, ul, v(upmin), v(upmax)
 	}')
+# Error rates per minute since the previous run (null on first run or after a counter reset)
+corr_total=$(echo "$state_message" | sed -nE 's/.*"corr": ([0-9]+).*/\1/p')
+uncorr_total=$(echo "$state_message" | sed -nE 's/.*"uncorr": ([0-9]+).*/\1/p')
+counter_file="${STATE_DIR:-/tmp}/technicolor_${modem_id}_counters"
+now_epoch=$(date +%s)
+prev_epoch=""; prev_corr=""; prev_uncorr=""
+[ -f "$counter_file" ] && read -r prev_epoch prev_corr prev_uncorr < "$counter_file"
+rates=$(awk -v t="$now_epoch" -v pt="$prev_epoch" -v c="$corr_total" -v pc="$prev_corr" -v u="$uncorr_total" -v pu="$prev_uncorr" '
+	BEGIN {
+		dt = t - pt
+		if (pt == "" || dt <= 0 || c < pc || u < pu) { print "null null"; exit }
+		printf "%.2f %.2f", (c - pc) * 60 / dt, (u - pu) * 60 / dt
+	}')
+echo "$now_epoch $corr_total $uncorr_total" > "$counter_file" 2>/dev/null
+state_message="${state_message% \}}, \"corr_rate\": ${rates% *}, \"uncorr_rate\": ${rates#* } }"
 mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting summary to topic ${state_topic}" ; exit 20 ; }
+
+# Channel lists as attributes (for per-channel charts and tables)
+state_topic="${mqtt_topic}/channels_down"
+pubConfigMessage "Summary" ${state_topic} "channels_down" "count" "Downstream Channel List" "measurement" "" "" "attr"
+mqtt_pub -r "${state_topic}" "{ \"count\": ${ds_count}, \"channels\": [ ${ds_list} ] }" || { echoerr "MQTT error posting downstream channel list" ; exit 20 ; }
+state_topic="${mqtt_topic}/channels_up"
+pubConfigMessage "Summary" ${state_topic} "channels_up" "count" "Upstream Channel List" "measurement" "" "" "attr"
+mqtt_pub -r "${state_topic}" "{ \"count\": ${us_count}, \"channels\": [ ${us_list} ] }" || { echoerr "MQTT error posting upstream channel list" ; exit 20 ; }
+
+# "Create Dashboard" button (only when a dashboard generator listens, i.e. in the app)
+if [ -n "${DASHBOARD_COMMAND_TOPIC}" ]; then
+	button_topic="${mqtt_topic_prefix%/*}/button/${modem_id}_create_dashboard/config"
+	button_message="{ \"name\": \"Create Dashboard\", \"command_topic\": \"${DASHBOARD_COMMAND_TOPIC}\", \"payload_press\": \"${serial_number}\", \"unique_id\": \"${modem_id}_create_dashboard\", \"icon\": \"mdi:view-dashboard-edit\", \"entity_category\": \"config\", \"device\": ${device_json} }"
+	mqtt_pub -r "${button_topic}" "${button_message}" || { echoerr "MQTT error posting dashboard button" ; exit 20 ; }
+fi
 
 echo "Done."

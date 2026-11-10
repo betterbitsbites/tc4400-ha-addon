@@ -29,16 +29,81 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 | `mqtt_topic_prefix` | `homeassistant/sensor` | MQTT discovery prefix |
 | `mqtt_uid_prefix` | `cablemodem` | Prefix for unique IDs |
 | `verbose` | `false` | Log the full scraper output on every run |
+| `dashboard_title` | `Cable modem` | Title of the generated dashboard |
+| `dashboard_url` | `cable-modem` | URL of the generated dashboard (must contain a hyphen). **An existing dashboard with this URL is overwritten.** |
+| `dashboard_cards` | `auto` | `auto`: use plotly-graph / apexcharts-card if installed; `builtin`: only built-in cards; `hacs`: always use them |
+| `dashboard_hours` | `48` | Time range of the charts |
 
 ## Sensors
 
-- **Modem**: connectivity, boot and security state, uptime, IP addresses
+- **Modem**: connectivity, boot and security state, uptime (text and seconds),
+  last boot (timestamp), TCP latency to the modem, DOCSIS and software version,
+  IP addresses
 - **Down N** / **Up N**: per channel frequency, width, power, SNR (downstream),
   modulation, lock/bonding status, corrected/uncorrectable errors (downstream)
 - **Summary**: channel and locked-channel counts, worst/average SNR, power ranges,
-  error totals
+  error totals and errors per minute
+- **Downstream / Upstream Channel List**: number of channels, with all channels
+  as the `channels` attribute (used by the dashboard's spectrum charts and tables)
+- **Create Dashboard** (button): builds the dashboard, see below
 
-An example dashboard is in the repository under `examples/dashboard.yaml`.
+## Dashboard
+
+Press **Create Dashboard** on the TC4400 device page
+(*Settings → Devices & services → MQTT → TC4400*). The app creates a dashboard
+(default `/cable-modem`, shown in the sidebar) and reports the result as a
+notification. Press it again any time — e.g. after installing extra cards or when
+channels change — and the dashboard is rebuilt. Entity IDs are looked up by their
+unique ID, so renamed entities and other modem integrations don't get in the way.
+
+**Contents**
+
+| Section | Built-in cards | With extra cards |
+|---|---|---|
+| Status | Connectivity, DOCSIS, uptime, last boot, latency, locked channels, errors | same |
+| Signal now | Gauges: worst SNR, highest upstream power, downstream power range | same |
+| Channels (spectrum) | – | Fritz!Box-style bars per channel along the frequency band: downstream power, downstream SNR, upstream power — coloured green/yellow/red (*plotly-graph*) |
+| Channel table | Table of all channels with 🟢🟡🔴 markers | same |
+| Upstream / Downstream | History graphs | Charts with coloured good/warning/bad ranges (*apexcharts-card*) |
+| Errors | Corrected/uncorrectable per hour/day | Columns per hour (*apexcharts-card*) |
+| Latency | History graph | Chart (*apexcharts-card*) |
+
+**Optional extra cards** — install from the Marketplace / HACS (*Dashboard*
+category), then press *Create Dashboard* again:
+
+- **Plotly Graph Card** (`plotly-graph`) — channel spectrum charts
+- **ApexCharts Card** (`apexcharts-card`) — time series with coloured ranges
+
+**As an action** (scripts, automations, *Developer tools → Actions*):
+
+```yaml
+# default settings from the app options
+action: button.press
+target:
+  entity_id: button.tc4400_create_dashboard
+```
+
+```yaml
+# custom settings (payload must be one line of JSON)
+action: mqtt.publish
+data:
+  topic: tc4400_scraper/dashboard/create
+  payload: >-
+    {"title": "Cable modem", "url_path": "cable-modem", "cards": "auto",
+    "hours": 24, "include": {"spectrum": true, "channel_table": true,
+    "upstream": true, "downstream": true, "errors": true, "latency": false}}
+```
+
+All keys are optional. `include` accepts `status`, `gauges`, `spectrum`,
+`channel_table`, `upstream`, `downstream`, `errors`, `latency`. With several modems
+add `"serial": "<serial number>"`.
+
+The colour thresholds are rough DOCSIS rules of thumb (256QAM): downstream power
+±7 dBmV good / ±15 tolerable, SNR ≥ 36 dB good / ≥ 33 dB marginal, upstream power
+≤ 47 dBmV good / ≤ 51 dBmV high. Providers use their own limits.
+
+A static example (built-in cards only) is in the repository under
+`examples/dashboard.yaml`.
 
 ## Troubleshooting
 
@@ -49,6 +114,8 @@ An example dashboard is in the repository under `examples/dashboard.yaml`.
 | `Scrape failed (exit code 23)` | Page reached but could not be parsed (unsupported firmware?) |
 | `Scrape failed (exit code 20)` | MQTT broker rejected the message (credentials, ACL) |
 | `No MQTT broker found` | Install the Mosquitto broker app or set `mqtt_host` |
+| `[dashboard] ERROR: no TC4400 sensors found` | Wait for the first scrape, then press *Create Dashboard* again |
+| `[dashboard] ERROR: authentication failed` | Restart the app (it needs Home Assistant API access, granted on install/update) |
 
 ---
 

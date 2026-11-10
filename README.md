@@ -89,16 +89,20 @@ Variables: `MODEM_URL`, `MODEM_USERNAME`, `MODEM_PASSWORD`, `MQTT_HOST`, `MQTT_P
 `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_PREFIX`, `MQTT_UID_PREFIX`,
 `MQTT_LOGGING_TOPIC`, `DRY_RUN`.
 
-## Summary sensors and dashboard
+## Dashboard
+
+The app adds a **Create Dashboard** button to the TC4400 device. One press builds a
+complete dashboard: status, gauges, a Fritz!Box-style channel spectrum, a channel
+table, upstream/downstream charts with coloured good/warning/bad ranges, errors and
+latency. It uses the optional cards *Plotly Graph Card* and *ApexCharts Card* when
+they are installed and falls back to built-in cards otherwise. Details, options and
+how to call it as an action: [app documentation](technicolor_modem_scrape/DOCS.md#dashboard).
 
 Besides one sensor set per channel, the scraper publishes **Summary** sensors across
-all channels: number of downstream/upstream channels and how many are locked, worst
-and average downstream SNR, downstream power range, upstream power range, and total
-corrected/uncorrectable errors.
-
-A ready-made dashboard using only built-in cards is in
-[`examples/dashboard.yaml`](examples/dashboard.yaml): create a new dashboard, open the
-raw configuration editor and paste the file.
+all channels (locked channel counts, worst/average SNR, power ranges, error totals and
+errors per minute), TCP latency, last boot time, and the full channel lists as
+attributes. A static example dashboard with built-in cards only is in
+[`examples/dashboard.yaml`](examples/dashboard.yaml).
 
 ## MQTT topics
 
@@ -109,6 +113,8 @@ raw configuration editor and paste the file.
 - `homeassistant/sensor/cablemodemXXXX/downstreamN` — downstream channel ID `N`
 - `homeassistant/sensor/cablemodemXXXX/upstreamN` — upstream channel `N`
 - `homeassistant/sensor/cablemodemXXXX/summary` — aggregates across all channels
+- `homeassistant/sensor/cablemodemXXXX/channels_down`, `.../channels_up` — channel lists
+- `tc4400_scraper/dashboard/create` — command topic of the dashboard generator (app only)
 
 ## Exit codes
 

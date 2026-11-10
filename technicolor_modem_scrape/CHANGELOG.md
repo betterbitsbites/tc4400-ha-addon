@@ -2,6 +2,28 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.2.0 — 2026-11-10
+
+### Added
+- **Create Dashboard** button on the TC4400 device: builds a complete dashboard
+  with one click (also usable as an action: `button.press`, or `mqtt.publish`
+  with custom settings). Entity IDs are looked up from the registry by unique ID.
+  Uses *plotly-graph* and *apexcharts-card* when installed, built-in cards
+  otherwise. New options: `dashboard_title`, `dashboard_url`, `dashboard_cards`,
+  `dashboard_hours`.
+- Fritz!Box-style **channel spectrum**: power and SNR per channel along the
+  frequency band, coloured by thresholds (plotly-graph).
+- **Channel table** for all down- and upstream channels with 🟢🟡🔴 markers
+  (built-in markdown card).
+- New sensors: **TCP latency** to the modem, **last boot** (timestamp),
+  **uptime in seconds**, **DOCSIS version**, **software version**,
+  **corrected / uncorrectable errors per minute**.
+- **Downstream / Upstream Channel List** sensors with all channels as attributes.
+
+### Changed
+- The app now has Home Assistant API access (needed to create the dashboard)
+  and includes Python 3 (standard library only).
+
 ## 1.1.0 — 2026-11-10
 
 ### Added
