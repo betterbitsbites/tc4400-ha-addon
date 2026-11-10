@@ -27,10 +27,10 @@ configuration:
     description: Log the full scraper output on every run
   dashboard_title:
     name: Dashboard title
-    description: Title of the dashboard created by the "Create Dashboard" button
+    description: Title of a new dashboard created by the "Create Dashboard" button
   dashboard_url:
     name: Dashboard URL
-    description: URL path, must contain a hyphen (e.g. cable-modem). An existing dashboard with this URL is overwritten.
+    description: Used when "Dashboard Target" is set to "New" - URL path of the new dashboard, must contain a hyphen (e.g. cable-modem)
   dashboard_cards:
     name: Dashboard cards
     description: auto = use plotly-graph / apexcharts-card if installed, builtin = only built-in cards, hacs = always use them

@@ -23,10 +23,18 @@ Two install methods, pick one.
 
 ## Option A — Home Assistant add-on (HA OS / Supervised) — recommended
 
-Requirements: the **Mosquitto broker** add-on (or any MQTT broker) and the MQTT integration.
+Requirements:
 
-1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add
-   `https://github.com/coaxx77/tc4400-ha-addon`
+- the **Mosquitto broker** add-on (or any MQTT broker) and the MQTT integration
+- **Home Assistant must be able to open the modem's web interface**
+  (`http://192.168.100.1`). Check it first: open that address in a browser on a PC in
+  the same network — the TC4400 login prompt must appear. Behind pfSense, OPNsense or
+  OpenWrt this usually needs a virtual IP, an outbound NAT rule and possibly a static
+  ARP entry on the router: **[Reaching the modem's web interface](MODEM_ACCESS.md)**
+
+1. **Settings → Apps → app store → ⋮ → Repositories** (before Home Assistant 2026.11:
+   *Settings → Add-ons → Add-on Store*), add `https://github.com/coaxx77/tc4400-ha-addon`
+   — or open [this link](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fcoaxx77%2Ftc4400-ha-addon)
 2. Install **Technicolor TC4400 Modem Scraper**.
 3. On the **Configuration** tab, enter your modem password if you changed it
    from the default `bEn2o#US9s`.
@@ -45,10 +53,6 @@ Mosquitto add-on. To use a different broker, fill in `mqtt_host` (and port/user/
 | `mqtt_uid_prefix` | `cablemodem` | |
 | `verbose` | `false` | log full scraper output each run |
 
-> The modem must be reachable from Home Assistant. Behind a router/firewall this
-> usually needs a virtual IP + outbound NAT rule on the WAN interface — step-by-step for
-> pfSense, OPNsense and OpenWrt in [the app documentation](technicolor_modem_scrape/DOCS.md#reaching-the-modem-through-your-router).
->
 > Release notes: [CHANGELOG](technicolor_modem_scrape/CHANGELOG.md)
 
 ---
@@ -91,8 +95,9 @@ Variables: `MODEM_URL`, `MODEM_USERNAME`, `MODEM_PASSWORD`, `MQTT_HOST`, `MQTT_P
 
 ## Dashboard
 
-The app adds a **Create Dashboard** button to the TC4400 device. One press builds a
-complete dashboard: status, gauges, internet latency, a Fritz!Box-style channel
+The app adds a **Dashboard Target** dropdown (your existing dashboards or a new one)
+and a **Create Dashboard** button to the TC4400 device. One press writes a complete
+TC4400 view into the chosen dashboard, leaving its other views untouched: status, gauges, internet latency, a Fritz!Box-style channel
 spectrum, a channel table, upstream/downstream charts with coloured good/warning/bad ranges, errors and
 latency. It uses the optional cards *Plotly Graph Card* and *ApexCharts Card* when
 they are installed and falls back to built-in cards otherwise. Details, options and

@@ -12,8 +12,8 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 - An MQTT broker. With the **Mosquitto broker** app installed, nothing needs to be
   configured: broker address and credentials are picked up automatically.
 - Home Assistant must be able to reach the modem's web interface, normally
-  `http://192.168.100.1`. Behind a router/firewall this usually needs one extra
-  step — see [Reaching the modem through your router](#reaching-the-modem-through-your-router).
+  `http://192.168.100.1` — test it in a browser first. Behind a router/firewall this
+  usually needs one extra step — see [Reaching the modem through your router](#reaching-the-modem-through-your-router).
 
 ## Options
 
@@ -30,7 +30,7 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 | `mqtt_uid_prefix` | `cablemodem` | Prefix for unique IDs |
 | `verbose` | `false` | Log the full scraper output on every run |
 | `dashboard_title` | `Cable modem` | Title of the generated dashboard |
-| `dashboard_url` | `cable-modem` | URL of the generated dashboard (must contain a hyphen). **An existing dashboard with this URL is overwritten.** |
+| `dashboard_url` | `cable-modem` | Dashboard that is created when *Dashboard Target* is set to *New: …* (URL must contain a hyphen) |
 | `dashboard_cards` | `auto` | `auto`: use plotly-graph / apexcharts-card if installed; `builtin`: only built-in cards; `hacs`: always use them |
 | `dashboard_hours` | `48` | Time range of the charts |
 | `latency_enabled` | `true` | Run the internet latency probe |
@@ -78,12 +78,23 @@ recorder. For a smaller database use a larger window (e.g. 30 or 60 s).
 
 ## Dashboard
 
-Press **Create Dashboard** on the TC4400 device page
-(*Settings → Devices & services → MQTT → TC4400*). The app creates a dashboard
-(default `/cable-modem`, shown in the sidebar) and reports the result as a
-notification. Press it again any time — e.g. after installing extra cards or when
-channels change — and the dashboard is rebuilt. Entity IDs are looked up by their
+On the TC4400 device page (*Settings → Devices & services → MQTT → TC4400*,
+section *Configuration*):
+
+1. **Dashboard Target** — choose where the dashboard goes: one of your existing
+   dashboards, or *New: Cable modem (/cable-modem)* to create a separate one
+   (shown in the sidebar). The list is refreshed every 10 minutes.
+2. Press **Create Dashboard**.
+
+The app writes a view **TC4400** (`/<dashboard>/tc4400`) into the chosen dashboard
+and reports the result as a notification. **Other views of that dashboard are not
+touched**; an existing TC4400 view is replaced. Press it again any time — e.g. after
+installing extra cards — to rebuild the view. Entity IDs are looked up by their
 unique ID, so renamed entities and other modem integrations don't get in the way.
+
+Dashboards that Home Assistant generates automatically (e.g. a never-edited
+*Overview*) must first be taken over: open the dashboard, *⋮ → Edit dashboard →
+Take control*. YAML dashboards can't be changed by the app.
 
 **Contents**
 
@@ -125,7 +136,8 @@ data:
     "upstream": true, "downstream": true, "errors": true, "latency": false}}
 ```
 
-All keys are optional. `include` accepts `status`, `gauges`, `internet`,
+All keys are optional. `url_path` overrides the *Dashboard Target* (`lovelace` = the
+*Overview* dashboard). `include` accepts `status`, `gauges`, `internet`,
 `spectrum`, `channel_table`, `upstream`, `downstream`, `errors`, `latency`
 (modem latency). `latency_hours` (default 3) is the time range of the internet
 latency charts. With several modems
@@ -154,101 +166,16 @@ A static example (built-in cards only) is in the repository under
 
 ## Reaching the modem through your router
 
-A cable modem in bridge mode keeps its own management address (TC4400:
-`192.168.100.1`). Your router's WAN interface, however, usually has a public IP from
-the provider, so it has no address in `192.168.100.0/24`. Requests from Home
-Assistant then go out the default route to the internet and never arrive.
-
-The fix on every router is the same idea:
-
-1. Give the WAN interface an **additional address in the modem's subnet**
-   (e.g. `192.168.100.2/24`). The router can now reach the modem directly and
-   resolve its MAC address via ARP.
-2. Add an **outbound NAT rule** so requests from your network to the modem leave
-   with that address. The modem only answers its own subnet and has no route back
-   to your LAN.
-3. Make sure **no policy routing** sends this traffic to a VPN or other gateway.
-
-Use any free address in the modem's subnet except `.1`. Don't use
-`192.168.100.0/24` for one of your own LANs/VLANs — it would shadow the modem.
-
-### pfSense
-
-1. **Firewall → Virtual IPs → Add**
-   - Type: **IP Alias**
-   - Interface: **WAN** (the interface the modem is connected to)
-   - Address: `192.168.100.2` / `24`
-   - Description: `Modem access`
-2. **Firewall → NAT → Outbound**
-   - Mode: **Hybrid Outbound NAT** (keeps your automatic rules) → Save
-   - **Add** a rule:
-     - Interface: **WAN**
-     - Source: the network or host of Home Assistant (e.g. `192.168.1.0/24`)
-     - Destination: Network `192.168.100.1` / `32`
-     - Translation / Address: the virtual IP `192.168.100.2`
-   - Save → Apply Changes
-3. **Policy routing** (only if you set a gateway on LAN/VLAN pass rules, e.g. for a
-   VPN client or multi-WAN gateway group): on the interface Home Assistant lives on,
-   add a pass rule **above** those rules with destination `192.168.100.1` and the
-   gateway left at **Default**. A rule with a gateway forces packets to that
-   gateway's MAC address, so they never reach the modem — a static ARP entry does
-   not help in that case.
-4. **Test**
-   - **Diagnostics → Ping**: host `192.168.100.1`, source address `192.168.100.2`
-   - **Diagnostics → ARP Table**: `192.168.100.1` should be listed on the WAN
-     interface with the modem's MAC address.
-
-Netgate's own guide (variant with a separate interface, needed for PPPoE WANs):
-[Accessing a CPE/Modem from Inside the Firewall](https://docs.netgate.com/pfsense/en/latest/interfaces/accessing-modem-from-inside-firewall.html).
-
-#### Static ARP entry (optional)
-
-Normally not needed — the router learns the modem's MAC via ARP once step 1 is done.
-Some modems stop answering ARP for a while after a reboot or resync; a static entry
-then keeps the modem reachable. Take the MAC from **Diagnostics → ARP Table** after
-a successful ping (it can differ from the "Cable Modem MAC" shown on the modem's
-status page).
-
-pfSense has no GUI for static ARP on a WAN interface. Install the **Shellcmd**
-package and add a command of type *shellcmd*:
+Home Assistant must be able to open the modem's web interface
+(`http://192.168.100.1`). Test it with a browser on a PC in the same network, or
+in a Home Assistant terminal:
 
 ```sh
-arp -S 192.168.100.1 aa:bb:cc:dd:ee:ff
+curl -s -o /dev/null -w '%{http_code}\n' --connect-timeout 5 http://192.168.100.1/
 ```
 
-(`-S` replaces an existing entry; `-s` fails if one exists.)
-
-### OPNsense
-
-1. **Interfaces → Virtual IPs → Settings → Add**
-   - Mode: **IP Alias**, Interface: **WAN**, Network: `192.168.100.2/24`
-2. **Firewall → NAT → Outbound**
-   - Mode: **Hybrid outbound NAT rule generation** → Save
-   - **Add**: Interface **WAN**, Source = Home Assistant's network,
-     Destination `192.168.100.1/32`, Translation / target = `192.168.100.2`
-3. **Policy routing**: if a LAN rule sets a gateway or gateway group, add a pass rule
-   above it with destination `192.168.100.1` and gateway **default**.
-4. **Static ARP (optional)**: newer versions have **Interfaces → Neighbors** for
-   static ARP entries (IP `192.168.100.1`, MAC from **Interfaces → Diagnostics → ARP Table**).
-
-### OpenWrt
-
-Add a second address on the WAN device and put it into the `wan` firewall zone
-(which already has masquerading enabled):
-
-```sh
-uci set network.modem=interface
-uci set network.modem.proto='static'
-uci set network.modem.device="$(uci get network.wan.device)"
-uci set network.modem.ipaddr='192.168.100.2'
-uci set network.modem.netmask='255.255.255.0'
-uci add_list firewall.@zone[1].network='modem'   # @zone[1] is usually "wan" - check with: uci show firewall
-uci commit && /etc/init.d/network reload && /etc/init.d/firewall reload
-```
-
-### Other routers (Fritz!Box, consumer routers)
-
-Many consumer routers already NAT traffic to `192.168.100.1` out of the box — try
-opening `http://192.168.100.1` in a browser first. If that doesn't work, look for an
-option like "modem access" or an additional WAN IP in the router's WAN settings;
-without such an option the modem can't be reached from behind that router.
+`200` or `401` = reachable. `000` = not reachable: behind pfSense, OPNsense or
+OpenWrt the router needs a virtual IP in the modem's subnet plus an outbound NAT
+rule (and optionally a static ARP entry). Step by step, with tests and
+troubleshooting:
+**[Reaching the modem's web interface](https://github.com/coaxx77/tc4400-ha-addon/blob/main/MODEM_ACCESS.md)**

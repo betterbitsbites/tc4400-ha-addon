@@ -4,7 +4,16 @@
 Part of the Technicolor TC4400 Modem Scraper app. Scraper by Philipp Reichmuth
 (phrxmd/Technicolor_modem_scrape), based on scripts by mmiller7. CC-BY-NC-SA 4.0.
 
-Usage: tc4400_dashboard.py [PAYLOAD]
+Usage:
+  tc4400_dashboard.py create [PAYLOAD]   build the dashboard view
+  tc4400_dashboard.py refresh            publish the "Dashboard Target" select
+                                         with the current list of dashboards
+  tc4400_dashboard.py select LABEL       store the dashboard chosen in the select
+
+The view "TC4400" (path tc4400) is added to the target dashboard, or replaced if
+it already exists; all other views of that dashboard are kept. The target is,
+in this order: url_path in the payload, the "Dashboard Target" select, the
+dashboard_url option (created if it doesn't exist).
 
 PAYLOAD is what was published to the dashboard command topic:
   * empty or a modem serial number (the "Create Dashboard" button), or
@@ -28,10 +37,16 @@ import os
 import re
 import socket
 import struct
+import subprocess
 import sys
 from urllib.parse import urlparse
 
 OPTIONS_FILE = "/data/options.json"
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+TARGET_FILE = os.path.join(DATA_DIR, "dashboard_target.json")
+TOPIC_BASE = "tc4400_scraper/dashboard"
+VIEW_PATH = "tc4400"
+DEFAULT_DASHBOARD = "lovelace"   # the built-in "Overview" dashboard
 SECTIONS = ("status", "gauges", "internet", "spectrum", "channel_table", "upstream",
             "downstream", "errors", "latency")
 
@@ -130,6 +145,12 @@ class WebSocket:
             self.sock.close()
 
 
+class HAError(RuntimeError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 class HomeAssistant:
     def __init__(self, url, token):
         self.ws = WebSocket(url)
@@ -152,7 +173,7 @@ class HomeAssistant:
                 continue  # events or late answers
             if not answer.get("success"):
                 err = answer.get("error", {})
-                raise RuntimeError("%s failed: %s" % (msg_type, err.get("message", err)))
+                raise HAError(err.get("code"), "%s failed: %s" % (msg_type, err.get("message", err)))
             return answer.get("result")
 
 
@@ -168,7 +189,8 @@ def load_settings(payload):
         pass
     settings = {
         "title": opts.get("dashboard_title", "Cable modem"),
-        "url_path": opts.get("dashboard_url", "cable-modem"),
+        "new_url": str(opts.get("dashboard_url", "cable-modem")).strip().lower(),
+        "url_path": stored_target() or opts.get("dashboard_url", "cable-modem"),
         "cards": opts.get("dashboard_cards", "auto"),
         "hours": int(opts.get("dashboard_hours", 48)),
         "latency_hours": 3,
@@ -194,11 +216,84 @@ def load_settings(payload):
     settings["latency_hours"] = max(1, min(int(settings["latency_hours"]), 48))
     if settings["cards"] not in ("auto", "builtin", "hacs"):
         raise ValueError("cards must be auto, builtin or hacs")
-    url = str(settings["url_path"]).strip().lower()
-    if not re.fullmatch(r"[a-z0-9_]+(-[a-z0-9_]+)+", url):
-        raise ValueError("url_path must contain a hyphen and only a-z, 0-9, _ (e.g. cable-modem)")
-    settings["url_path"] = url
+    settings["url_path"] = str(settings["url_path"]).strip().lower().lstrip("/") or DEFAULT_DASHBOARD
     return settings
+
+
+def valid_new_url(url):
+    return re.fullmatch(r"[a-z0-9_]+(-[a-z0-9_]+)+", url or "") is not None
+
+
+def stored_target():
+    try:
+        with open(TARGET_FILE) as f:
+            return json.load(f).get("url_path")
+    except (OSError, ValueError):
+        return None
+
+
+def store_target(url_path):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(TARGET_FILE, "w") as f:
+            json.dump({"url_path": url_path}, f)
+    except OSError as e:
+        log("could not store dashboard target: %s" % e)
+
+
+# --------------------------------------------------------------------------
+# MQTT (via mosquitto_pub, like the scraper)
+# --------------------------------------------------------------------------
+def mqtt_publish(topic, payload, retain=True):
+    message = payload if isinstance(payload, str) else json.dumps(payload)
+    if os.environ.get("DRY_RUN") == "1":
+        print("[dry-run] %s%s: %s" % ("-r " if retain else "", topic, message), flush=True)
+        return
+    cmd = ["mosquitto_pub", "-h", os.environ.get("MQTT_HOST", "127.0.0.1"),
+           "-p", str(os.environ.get("MQTT_PORT") or 1883), "-t", topic, "-m", message]
+    if retain:
+        cmd.append("-r")
+    if os.environ.get("MQTT_USERNAME"):
+        cmd += ["-u", os.environ["MQTT_USERNAME"]]
+    if os.environ.get("MQTT_PASSWORD"):
+        cmd += ["-P", os.environ["MQTT_PASSWORD"]]
+    subprocess.run(cmd, check=True, timeout=15, capture_output=True)
+
+
+# --------------------------------------------------------------------------
+# Dashboard targets ("Dashboard Target" select)
+# --------------------------------------------------------------------------
+def dashboard_targets(ha, settings):
+    """[(label, url_path, exists)] of dashboards the view can be written to."""
+    targets = [("Overview (/%s)" % DEFAULT_DASHBOARD, DEFAULT_DASHBOARD, True)]
+    for d in sorted(ha.call("lovelace/dashboards/list") or [], key=lambda d: (d.get("title") or "").lower()):
+        if d.get("mode", "storage") != "storage" or not d.get("url_path"):
+            continue  # YAML dashboards can't be written
+        targets.append(("%s (/%s)" % (d.get("title") or d["url_path"], d["url_path"]), d["url_path"], True))
+    if settings["new_url"] not in [t[1] for t in targets] and valid_new_url(settings["new_url"]):
+        targets.append(("New: %s (/%s)" % (settings["title"], settings["new_url"]), settings["new_url"], False))
+    return targets
+
+
+def label_to_url(label):
+    m = re.search(r"\(/([^)]+)\)\s*$", label or "")
+    return m.group(1) if m else None
+
+
+def publish_target_select(ha, settings, modem_id, targets):
+    current = settings["url_path"]
+    labels = [t[0] for t in targets]
+    state = next((t[0] for t in targets if t[1] == current), None)
+    if state is None:  # stored target was deleted: fall back to the option
+        state = next((t[0] for t in targets if t[1] == settings["new_url"]), labels[0])
+    disc = os.environ.get("MQTT_TOPIC_PREFIX", "homeassistant/sensor").rsplit("/", 1)[0]
+    mqtt_publish("%s/select/%s_dashboard_target/config" % (disc, modem_id), {
+        "name": "Dashboard Target", "unique_id": "%s_dashboard_target" % modem_id,
+        "command_topic": TOPIC_BASE + "/target/set", "state_topic": TOPIC_BASE + "/target",
+        "options": labels, "icon": "mdi:view-dashboard-variant", "entity_category": "config",
+        "device": {"identifiers": [modem_id]}})
+    mqtt_publish(TOPIC_BASE + "/target", state)
+    return state
 
 
 # --------------------------------------------------------------------------
@@ -334,25 +429,40 @@ def gauge(entity, name, gmin, gmax, severity=None, segments=None):
     return card
 
 
-def plotly_spectrum(title, entity, value, unit, color_js):
-    """Fritz!Box-style chart: one bar per channel at its frequency."""
+def plotly_spectrum(title, entity, value, unit, color_js, yrange=None, lines=()):
+    """Fritz!Box-style spectrum: one block per channel at its frequency, as wide as
+    the channel, coloured by thresholds; dashed lines mark the thresholds."""
     chans = "(hass.states['%s']?.attributes?.channels || [])" % entity
+    shapes = [{"type": "line", "xref": "paper", "x0": 0, "x1": 1, "y0": y, "y1": y,
+               "line": {"color": color, "width": 1, "dash": "dash"}} for y, color in lines]
+    yaxis = {"title": {"text": unit}, "zeroline": True}
+    if yrange:
+        yaxis["range"] = list(yrange)
     return full({
         "type": "custom:plotly-graph",
         "title": title,
         "raw_plotly_config": True,
+        "refresh_interval": 60,
+        "config": {"displayModeBar": False},
         "entities": [{
             "entity": entity,
             "name": "%s (%s)" % (value.upper() if value == "snr" else value.capitalize(), unit),
             "type": "bar",
             "x": "$ex %s.map(c => c.frequency / 1e6)" % chans,
             "y": "$ex %s.map(c => c.%s)" % (chans, value),
-            "marker": {"color": "$ex %s.map(c => %s)" % (chans, color_js)},
-            "hovertemplate": "%%{x:.1f} MHz<br>%%{y:.1f} %s<extra></extra>" % unit,
+            # block width = channel width (at least 1 MHz so narrow channels stay visible)
+            "width": "$ex %s.map(c => Math.max((c.width || 0) / 1e6, 1) * 0.95)" % chans,
+            "marker": {"color": "$ex %s.map(c => typeof c.%s !== 'number' ? '#9e9e9e' : (%s))"
+                                % (chans, value, color_js),
+                       "opacity": "$ex %s.map(c => /OFDM/.test(c.type || '') ? 0.55 : 0.95)" % chans},
+            "customdata": "$ex %s.map(c => [c.id, c.type, c.profile, (c.width || 0) / 1e6])" % chans,
+            "hovertemplate": ("Channel %%{customdata[0]} · %%{customdata[1]} · %%{customdata[2]}<br>"
+                              "%%{x:.1f} MHz (%%{customdata[3]:.1f} MHz wide)<br>%%{y:.1f} %s<extra></extra>") % unit,
         }],
-        "layout": {"height": 260, "showlegend": False, "bargap": 0.2,
+        "layout": {"height": 240, "showlegend": False, "bargap": 0,
+                   "margin": {"t": 10, "b": 45, "l": 55, "r": 10},
                    "xaxis": {"type": "linear", "title": {"text": "MHz"}},
-                   "yaxis": {"title": {"text": unit}}},
+                   "yaxis": yaxis, "shapes": shapes},
     })
 
 
@@ -406,30 +516,34 @@ def latency_summary(title, keys):
 
 
 def apex_latency(title, keys, hours):
-    """pfSense-style chart: min-max shading, average, base latency and congestion threshold."""
+    """pfSense-style chart, smoothed to 1-minute values: P95 shading, average curve,
+    base latency and congestion threshold. Max/jitter/loss only in the header, so
+    single spikes don't flatten the curve."""
+    one_min = {"duration": "1min", "fill": "last"}
     series = []
-    if keys.get("max"):
-        series.append({"entity": keys["max"], "name": "Max", "type": "area", "color": "#e57373",
-                       "opacity": 0.25, "stroke_width": 0, "curve": "straight", "show": {"in_header": False}})
-    if keys.get("min"):
-        series.append({"entity": keys["min"], "name": "Min", "type": "line", "color": "#e57373",
-                       "opacity": 0.6, "stroke_width": 1, "curve": "straight", "show": {"in_header": False}})
+    if keys.get("p95"):
+        series.append({"entity": keys["p95"], "name": "P95", "type": "area", "color": "#e57373",
+                       "opacity": 0.25, "stroke_width": 1, "curve": "smooth",
+                       "group_by": dict(one_min, func="avg")})
     series.append({"entity": keys["avg"], "name": "Average", "type": "line", "color": "#ef5350",
-                   "stroke_width": 2, "curve": "straight"})
+                   "stroke_width": 2, "curve": "smooth", "group_by": dict(one_min, func="avg")})
     if keys.get("base"):
         series.append({"entity": keys["base"], "name": "Base latency", "type": "line", "color": "#26a69a",
-                       "stroke_width": 2, "stroke_dash": 4, "curve": "stepline"})
+                       "stroke_width": 2, "stroke_dash": 4, "curve": "stepline",
+                       "group_by": dict(one_min, func="last")})
     if keys.get("threshold"):
         series.append({"entity": keys["threshold"], "name": "Congestion threshold", "type": "line",
-                       "color": "#f9a825", "stroke_width": 2, "stroke_dash": 4, "curve": "stepline"})
-    for k, name in (("p95", "P95"), ("jitter", "Jitter"), ("loss", "Loss")):
+                       "color": "#f9a825", "stroke_width": 2, "stroke_dash": 4, "curve": "stepline",
+                       "group_by": dict(one_min, func="last")})
+    for k, name in (("max", "Max"), ("jitter", "Jitter"), ("loss", "Loss")):
         if keys.get(k):
             series.append({"entity": keys[k], "name": name, "show": {"in_chart": False}})
     return full({
         "type": "custom:apexcharts-card",
         "graph_span": "%dh" % hours,
+        "update_interval": "1min",
         "header": {"show": True, "title": title, "show_states": True, "colorize_states": True},
-        "yaxis": [{"min": 0, "decimals": 0}],
+        "yaxis": [{"min": 0, "max": "~60", "decimals": 0}],
         "series": series,
     })
 
@@ -507,10 +621,15 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
                           % (DS_POWER_WARN, RED, DS_POWER_OK, YELLOW, GREEN))
         snr_color = "c.snr < %d ? '%s' : (c.snr < %d ? '%s' : '%s')" % (SNR_WARN, RED, SNR_OK, YELLOW, GREEN)
         us_color = "c.power > %d ? '%s' : (c.power > %d ? '%s' : '%s')" % (US_POWER_WARN, RED, US_POWER_OK, YELLOW, GREEN)
-        cards = [plotly_spectrum("Downstream power per channel", ds_list, "power", "dBmV", ds_power_color),
-                 plotly_spectrum("Downstream SNR per channel", ds_list, "snr", "dB", snr_color)]
+        cards = [plotly_spectrum("Downstream power per channel", ds_list, "power", "dBmV", ds_power_color,
+                                 (-DS_POWER_WARN - 3, DS_POWER_WARN + 3),
+                                 [(DS_POWER_OK, YELLOW), (-DS_POWER_OK, YELLOW),
+                                  (DS_POWER_WARN, RED), (-DS_POWER_WARN, RED)]),
+                 plotly_spectrum("Downstream SNR per channel", ds_list, "snr", "dB", snr_color,
+                                 (20, 45), [(SNR_OK, YELLOW), (SNR_WARN, RED)])]
         if us_list:
-            cards.append(plotly_spectrum("Upstream power per channel", us_list, "power", "dBmV", us_color))
+            cards.append(plotly_spectrum("Upstream power per channel", us_list, "power", "dBmV", us_color,
+                                         (30, 56), [(US_POWER_OK, YELLOW), (US_POWER_WARN, RED)]))
         section("Channels (spectrum)", cards)
 
     if inc["channel_table"] and (ds_list or us_list):
@@ -564,11 +683,8 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
         section("Modem latency", [apex_line("TCP latency to the modem", s, hours, ymin=0)
                                   if have_apex else history("TCP latency to the modem", s, hours)])
 
-    return {
-        "title": settings["title"],
-        "views": [{"title": "TC4400", "path": "tc4400", "icon": "mdi:router-network",
-                   "type": "sections", "max_columns": 3, "sections": sections}],
-    }
+    return {"title": "TC4400", "path": VIEW_PATH, "icon": "mdi:router-network",
+            "type": "sections", "max_columns": 3, "sections": sections}
 
 
 def installed_cards(ha):
@@ -580,14 +696,59 @@ def installed_cards(ha):
     return "plotly-graph" in urls, "apexcharts-card" in urls
 
 
-def main(argv):
-    settings = load_settings(argv[1] if len(argv) > 1 else "")
+def connect():
     url = os.environ.get("HA_WS_URL", "ws://supervisor/core/websocket")
     token = os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
     if not token:
         raise PermissionError("no token: SUPERVISOR_TOKEN missing (homeassistant_api not enabled?)")
+    return HomeAssistant(url, token)
 
-    ha = HomeAssistant(url, token)
+
+def write_view(ha, settings, view, targets):
+    """Add or replace our view in the target dashboard. Returns the dashboard URL."""
+    url_path = settings["url_path"]
+    known = {t[1]: t for t in targets}
+    api_url = None if url_path == DEFAULT_DASHBOARD else url_path
+    if url_path not in known or not known[url_path][2]:
+        yaml = [d for d in (ha.call("lovelace/dashboards/list") or []) if d.get("url_path") == url_path]
+        if yaml:
+            raise ValueError("dashboard /%s is a YAML dashboard and can't be changed" % url_path)
+        if not valid_new_url(url_path):
+            raise ValueError("new dashboard URL must contain a hyphen and only a-z, 0-9, _ (e.g. cable-modem)")
+        ha.call("lovelace/dashboards/create", url_path=url_path, title=settings["title"],
+                icon="mdi:router-network", show_in_sidebar=True, require_admin=False)
+        log("Created dashboard /%s" % url_path)
+        config = {"title": settings["title"], "views": []}
+    else:
+        try:
+            config = ha.call("lovelace/config", url_path=api_url, force=False) or {}
+        except HAError as e:
+            if e.code != "config_not_found":
+                raise
+            config = None
+        if config is None or "strategy" in config or "views" not in config:
+            raise ValueError("dashboard /%s is generated automatically. Open it, choose "
+                             "\u22ee \u2192 Edit dashboard \u2192 Take control, then try again "
+                             "(or pick another dashboard)" % url_path)
+    views = config.setdefault("views", [])
+    for i, v in enumerate(views):
+        if v.get("path") == VIEW_PATH:
+            views[i] = view
+            action = "Replaced"
+            break
+    else:
+        views.append(view)
+        action = "Added"
+    ha.call("lovelace/config/save", url_path=api_url, config=config)
+    n_cards = sum(len(s["cards"]) - 1 for s in view["sections"])
+    log("%s view /%s/%s with %d cards (%d view(s) in this dashboard)" % (
+        action, url_path, VIEW_PATH, n_cards, len(views)))
+    return url_path
+
+
+def cmd_create(payload):
+    settings = load_settings(payload)
+    ha = connect()
     try:
         registry = ha.call("config/entity_registry/list")
         serial, mapping = find_entities(registry, settings["uid_prefix"], settings["serial"])
@@ -601,17 +762,16 @@ def main(argv):
         log("Modem %s: %d entities, %d latency target(s); plotly-graph %s, apexcharts-card %s" % (
             serial, len(mapping), len(latency), "yes" if have_plotly else "no", "yes" if have_apex else "no"))
 
-        config = build_dashboard(ent, settings, have_plotly, have_apex, latency)
+        view = build_dashboard(ent, settings, have_plotly, have_apex, latency)
+        targets = dashboard_targets(ha, settings)
+        url_path = write_view(ha, settings, view, targets)
 
-        url_path = settings["url_path"]
-        dashboards = ha.call("lovelace/dashboards/list") or []
-        if not any(d.get("url_path") == url_path for d in dashboards):
-            ha.call("lovelace/dashboards/create", url_path=url_path, title=settings["title"],
-                    icon="mdi:router-network", show_in_sidebar=True, require_admin=False)
-            log("Created dashboard /%s" % url_path)
-        ha.call("lovelace/config/save", url_path=url_path, config=config)
-        n_cards = sum(len(s["cards"]) - 1 for s in config["views"][0]["sections"])
-        log("Saved dashboard /%s with %d cards" % (url_path, n_cards))
+        # keep the select in sync (a new dashboard now exists)
+        try:
+            settings["url_path"] = url_path
+            publish_target_select(ha, settings, settings["uid_prefix"] + serial, dashboard_targets(ha, settings))
+        except Exception as e:  # not critical
+            log("could not update the Dashboard Target select: %s" % e)
 
         missing = []
         if settings["cards"] != "builtin":
@@ -625,11 +785,52 @@ def main(argv):
                     "*Create Dashboard* again: " + ", ".join(missing) + ".")
         ha.call("call_service", domain="persistent_notification", service="create",
                 service_data={"title": "TC4400 dashboard ready",
-                              "message": "Dashboard [%s](/%s) was created/updated for modem %s.%s"
-                                         % (settings["title"], url_path, serial, hint),
+                              "message": "View [TC4400](/%s/%s) was written to dashboard /%s for modem %s.%s"
+                                         % (url_path, VIEW_PATH, url_path, serial, hint),
                               "notification_id": "tc4400_dashboard"})
+    except ValueError as e:
+        try:
+            ha.call("call_service", domain="persistent_notification", service="create",
+                    service_data={"title": "TC4400 dashboard not created", "message": str(e),
+                                  "notification_id": "tc4400_dashboard"})
+        finally:
+            raise
     finally:
         ha.ws.close()
+
+
+def cmd_refresh():
+    settings = load_settings("")
+    ha = connect()
+    try:
+        serial, _ = find_entities(ha.call("config/entity_registry/list"), settings["uid_prefix"])
+        targets = dashboard_targets(ha, settings)
+        state = publish_target_select(ha, settings, settings["uid_prefix"] + serial, targets)
+        log("Dashboard Target: %d choice(s), current: %s" % (len(targets), state))
+    finally:
+        ha.ws.close()
+
+
+def cmd_select(label):
+    url_path = label_to_url(label)
+    if not url_path:
+        raise ValueError("unknown dashboard choice: %s" % label)
+    store_target(url_path)
+    mqtt_publish(TOPIC_BASE + "/target", label.strip())
+    log("Dashboard Target set to /%s" % url_path)
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else "create"
+    arg = argv[2] if len(argv) > 2 else ""
+    if command == "refresh":
+        cmd_refresh()
+    elif command == "select":
+        cmd_select(arg)
+    elif command == "create":
+        cmd_create(arg)
+    else:  # backwards compatible: tc4400_dashboard.py PAYLOAD
+        cmd_create(command)
 
 
 if __name__ == "__main__":

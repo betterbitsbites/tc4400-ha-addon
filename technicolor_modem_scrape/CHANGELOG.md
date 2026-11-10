@@ -2,6 +2,28 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.4.0 — 2026-11-10
+
+### Added
+- **Dashboard Target** select on the TC4400 device: choose one of your existing
+  dashboards or a new one. The app writes its own **TC4400** view into it and
+  leaves all other views untouched (an existing TC4400 view is replaced).
+  Auto-generated and YAML dashboards are detected and reported.
+- **Reaching the modem's web interface** guide (`MODEM_ACCESS.md`): browser and
+  `curl` tests, router setup for pfSense / OPNsense / OpenWrt, static ARP,
+  troubleshooting. Linked from the requirements.
+
+### Changed
+- Internet latency chart: smoothed 1-minute curves, P95 shading instead of max
+  spikes, so single spikes no longer flatten the chart (max, jitter and loss
+  stay in the header).
+- Channel spectrum: blocks as wide as the channels (like a real spectrum),
+  OFDM channels semi-transparent, dashed threshold lines, fixed value ranges,
+  tighter layout, hover shows channel ID, type, modulation and width; channels
+  without a value are grey.
+- Dashboard notifications link directly to the TC4400 view; errors are reported
+  as a notification too.
+
 ## 1.3.0 — 2026-11-10
 
 ### Added
