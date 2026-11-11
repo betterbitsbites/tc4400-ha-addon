@@ -95,6 +95,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# error-rate counters and channel history (sparklines)
+StateDirectory=technicolor-modem-scrape
+Environment=STATE_DIR=/var/lib/technicolor-modem-scrape
 ExecStart=${BIN} ${CONF}
 EOF
 

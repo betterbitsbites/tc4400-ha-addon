@@ -107,14 +107,15 @@ DRY_RUN=1 ./technicolor_signal_dump.sh     # print MQTT messages instead of publ
 
 Variables: `MODEM_URL`, `MODEM_USERNAME`, `MODEM_PASSWORD`, `MQTT_HOST`, `MQTT_PORT`,
 `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_PREFIX`, `MQTT_UID_PREFIX`,
-`MQTT_LOGGING_TOPIC`, `DRY_RUN`.
+`MQTT_LOGGING_TOPIC`, `HISTORY_LENGTH` (default 30, `0` = off), `STATE_DIR`
+(default `/tmp`), `DRY_RUN`.
 
 ## Dashboard
 
 The app adds a **Dashboard Target** dropdown (your existing dashboards or a new one)
 and a **Create Dashboard** button to the TC4400 device. One press writes a complete
 TC4400 view into the chosen dashboard, leaving its other views untouched: status, gauges, internet latency, a Fritz!Box-style channel
-spectrum, a channel table, upstream/downstream charts with coloured good/warning/bad ranges, errors and
+spectrum, a channel table with trend sparklines of the last 30 scrapes, upstream/downstream charts with coloured good/warning/bad ranges, errors and
 latency. It uses the optional cards *Plotly Graph Card* and *ApexCharts Card* when
 they are installed and falls back to built-in cards otherwise. Details, options and
 how to call it as an action: [app documentation](technicolor_modem_scrape/DOCS.md#dashboard).

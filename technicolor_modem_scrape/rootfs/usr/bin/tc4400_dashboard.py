@@ -303,7 +303,7 @@ def publish_target_select(ha, settings, modem_id, targets):
 def find_entities(registry, uid_prefix, serial=None):
     pattern = re.compile(
         r"^" + re.escape(uid_prefix) +
-        r"(?P<serial>[A-Za-z0-9]+)_(?P<infix>status|summary|channels_down|channels_up|downstream\d+|upstream\d+)_(?P<key>\w+)$"
+        r"(?P<serial>[A-Za-z0-9]+)_(?P<infix>status|summary|channels_down|channels_up|channel_history|downstream\d+|upstream\d+)_(?P<key>\w+)$"
     )
     modems = {}
     for e in registry:
@@ -467,35 +467,82 @@ def plotly_spectrum(title, entity, value, unit, color_js, yrange=None, lines=())
     })
 
 
-def channel_table(title, entity, upstream=False):
-    """Markdown table from the channel list attributes (built-in card)."""
-    mark_ok = "🟢"
-    mark_warn = "🟡"
-    mark_bad = "🔴"
-    if upstream:
-        head = "| Ch | ID | Type | MHz | Power dBmV | Modulation | Lock |\n|---:|---:|:--|---:|---:|:--|:--|\n"
-        row = ("| {{ c.channel }} | {{ c.id }} | {{ c.type }} | {{ fmt(c.frequency) }} | "
-               "{{ v(c.power) }} {{ us(c.power) }} | {{ c.profile }} | {{ c.lockstatus }} |\n")
-    else:
-        head = ("| ID | Type | MHz | Power dBmV | SNR dB | Modulation | Corrected | Uncorr. |\n"
-                "|---:|:--|---:|---:|---:|:--|---:|---:|\n")
-        foot = ("\n<small>🔵 OFDM: SNR measured differently, SC-QAM thresholds don't apply. "
-                "Corrected/uncorrectable count codewords, which OFDM sends far more of.</small>\n")
-        row = ("| {{ c.id }} | {{ c.type }} | {{ fmt(c.frequency) }} | {{ v(c.power) }} {{ dp(c.power) }} | "
-               "{{ v(c.snr) }} {{ sn(c.snr, c.type) }} | {{ c.profile }} | {{ c.corr }} | {{ c.uncorr }} |\n")
-    content = (
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def channel_table(title, entity, upstream=False, history=None):
+    """Markdown table from the channel list attributes (built-in card).
+
+    With a history entity, every row gets text sparklines of the last scrapes:
+    downstream SNR and uncorrectable errors per scrape, upstream power. They are
+    coloured by the latest value (OFDM SNR in blue: no SC-QAM thresholds)."""
+    mark_ok, mark_warn, mark_bad = "🟢", "🟡", "🔴"
+    c_ok, c_warn, c_bad, c_ofdm, c_dim = "#4caf50", "#fbc02d", "#e53935", OFDM_BLUE, "#757575"
+    macros = (
         "{%- macro fmt(f) -%}{{ (f / 1000000) | round(1) if f is number else '–' }}{%- endmacro -%}\n"
         "{%- macro v(x) -%}{{ x if x is number else '–' }}{%- endmacro -%}\n"
         "{%- macro dp(x) -%}{% if x is number %}{{ '" + mark_bad + "' if x | abs > " + str(DS_POWER_WARN) +
         " else ('" + mark_warn + "' if x | abs > " + str(DS_POWER_OK) + " else '" + mark_ok + "') }}{% endif %}{%- endmacro -%}\n"
-        "{%- macro sn(x, t) -%}{% if x is number and 'OFDM' in (t or '') %}🔵{% elif x is number %}{{ '" + mark_bad + "' if x < " + str(SNR_WARN) +
+        "{%- macro sn(x, t) -%}{% if x is number and 'OFDM' in (t or '') %}🔵{% elif x is number %}{{ '" + mark_bad +
+        "' if x < " + str(SNR_WARN) +
         " else ('" + mark_warn + "' if x < " + str(SNR_OK) + " else '" + mark_ok + "') }}{% endif %}{%- endmacro -%}\n"
         "{%- macro us(x) -%}{% if x is number %}{{ '" + mark_bad + "' if x > " + str(US_POWER_WARN) +
         " else ('" + mark_warn + "' if x > " + str(US_POWER_OK) + " else '" + mark_ok + "') }}{% endif %}{%- endmacro -%}\n"
+        "{%- macro typ(t) -%}{{ ' <sub>' ~ t ~ '</sub>' if t and t != 'SC-QAM' else '' }}{%- endmacro -%}\n"
+        # sparkline: values scaled to the row's own range, but at least `span` wide so
+        # noise doesn't look like a cliff; missing values are a thin space
+        "{%- macro spark(vals, span, color) -%}"
+        "{%- set nums = (vals or []) | select('number') | list -%}"
+        "{%- if nums | count < 2 -%}<font color=\"" + c_dim + "\">collecting…</font>{%- else -%}"
+        "{%- set lo = nums | min -%}{%- set hi = [nums | max, lo + span] | max -%}"
+        "<font color=\"{{ color }}\">{%- for x in vals -%}"
+        "{%- if x is number -%}{{ '" + SPARK_CHARS + "'[(((x - lo) / (hi - lo)) * 7) | round(0) | int] }}"
+        "{%- else -%}&#8201;{%- endif -%}{%- endfor -%}</font>{%- endif -%}{%- endmacro -%}\n"
+        # error sparkline: height ~ sqrt(errors per scrape), grey when there were none
+        "{%- macro espark(vals) -%}"
+        "{%- set nums = (vals or []) | select('number') | list -%}"
+        "{%- if nums | count < 1 -%}<font color=\"" + c_dim + "\">collecting…</font>{%- else -%}"
+        "{%- set hi = [nums | max, 1] | max -%}{%- set total = nums | sum -%}"
+        "<font color=\"{{ '" + c_bad + "' if total > 0 else '" + c_dim + "' }}\">{%- for x in vals -%}"
+        "{%- if x is number -%}{{ '" + SPARK_CHARS + "'[((x / hi) ** 0.5 * 7) | round(0) | int] }}"
+        "{%- else -%}&#8201;{%- endif -%}{%- endfor -%}</font> <sub>{{ total | int }}</sub>{%- endif -%}{%- endmacro -%}\n"
+        "{%- macro snrcol(x, t) -%}{{ '" + c_ofdm + "' if 'OFDM' in (t or '') else ('" + c_bad + "' if x is number and x < " +
+        str(SNR_WARN) + " else ('" + c_warn + "' if x is number and x < " + str(SNR_OK) + " else '" + c_ok + "')) }}{%- endmacro -%}\n"
+        "{%- macro uscol(x) -%}{{ '" + c_bad + "' if x is number and x > " + str(US_POWER_WARN) + " else ('" + c_warn +
+        "' if x is number and x > " + str(US_POWER_OK) + " else '" + c_ok + "') }}{%- endmacro -%}\n"
         "{%- set chans = state_attr('" + entity + "', 'channels') or [] -%}\n"
-        + head +
-        "{%- for c in chans | sort(attribute='frequency') %}\n" + row.rstrip("\n") + "\n{%- endfor %}\n"
-        + ("" if upstream else foot)
+    )
+    if history:
+        macros += ("{%- set hist = state_attr('" + history + "', 'up' if " + ("true" if upstream else "false") +
+                   " else 'down') or {} -%}\n"
+                   "{%- set n = state_attr('" + history + "', 'length') or 30 -%}\n")
+    if upstream:
+        head = "| Ch | ID | MHz | Power dBmV | Modulation | Lock |"
+        sep = "|---:|---:|---:|---:|:--|:--|"
+        row = ("| {{ c.channel }} | {{ c.id }}{{ typ(c.type) }} | {{ fmt(c.frequency) }} | "
+               "{{ v(c.power) }} {{ us(c.power) }} | {{ c.profile }} | {{ c.lockstatus }} |")
+        if history:
+            head += " Power · last {{ n }} |"
+            sep += ":--|"
+            row += " {% set h = hist.get(c.id | string, {}) %}{{ spark(h.power, 3, uscol(c.power)) }} |"
+        foot = ""
+    else:
+        head = "| ID | MHz | Power dBmV | SNR dB | Modulation | Corrected | Uncorr. |"
+        sep = "|---:|---:|---:|---:|:--|---:|---:|"
+        row = ("| {{ c.id }}{{ typ(c.type) }} | {{ fmt(c.frequency) }} | {{ v(c.power) }} {{ dp(c.power) }} | "
+               "{{ v(c.snr) }} {{ sn(c.snr, c.type) }} | {{ c.profile }} | {{ c.corr }} | {{ c.uncorr }} |")
+        if history:
+            head += " SNR · last {{ n }} | Uncorr. per scrape |"
+            sep += ":--|:--|"
+            row += (" {% set h = hist.get(c.id | string, {}) %}{{ spark(h.snr, 3, snrcol(c.snr, c.type)) }} | "
+                    "{{ espark(h.uncorr) }} |")
+        foot = ("\n<small>🔵 OFDM: SNR measured differently, SC-QAM thresholds don't apply. "
+                "Corrected/uncorrectable count codewords, which OFDM sends far more of."
+                + (" Trends: last scrapes, newest on the right; the number is the sum of the "
+                   "uncorrectable errors shown." if history else "") + "</small>\n")
+    content = (
+        macros + head + "\n" + sep + "\n"
+        "{%- for c in chans | sort(attribute='frequency') %}\n" + row + "\n{%- endfor %}\n" + foot
     )
     return full({"type": "markdown", "title": title, "content": content})
 
@@ -559,13 +606,17 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
     inc, hours = settings["include"], settings["hours"]
     sections = []
 
-    def section(title, cards):
+    def section(title, cards, span=1):
         cards = [c for c in cards if c]
         if cards:
-            sections.append({"type": "grid", "cards": [heading(title)] + cards})
+            sec = {"type": "grid", "cards": [heading(title)] + cards}
+            if span > 1:
+                sec["column_span"] = span
+            sections.append(sec)
 
     E = ent.get
     ds_list, us_list = E("channels_down", "count"), E("channels_up", "count")
+    hist = E("channel_history", "scrapes")
 
     if inc["status"]:
         rows = [
@@ -642,10 +693,11 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
     if inc["channel_table"] and (ds_list or us_list):
         cards = []
         if ds_list:
-            cards.append(channel_table("Downstream channels", ds_list))
+            cards.append(channel_table("Downstream channels", ds_list, history=hist))
         if us_list:
-            cards.append(channel_table("Upstream channels", us_list, upstream=True))
-        section("Channel table", cards)
+            cards.append(channel_table("Upstream channels", us_list, upstream=True, history=hist))
+        # twice as wide, so the table with its trend columns fits without scrolling
+        section("Channel table", cards, span=2 if hist else 1)
 
     if inc["upstream"]:
         series = [(e, "Up %d" % n) for n, e in ent.channels("upstream", "power")]

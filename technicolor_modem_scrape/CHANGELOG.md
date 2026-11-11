@@ -2,6 +2,21 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.6.0 — 2026-11-11
+
+### Added
+- **Trend sparklines in the channel table**: every downstream row shows its SNR
+  and its uncorrectable errors per scrape over the last 30 scrapes, every
+  upstream row its transmit power — coloured by the latest value, OFDM in blue.
+  New option `history_length` (default 30, `0` = off) and a *Channel History*
+  sensor that carries the data.
+
+### Changed
+- Channel table: the type is shown next to the ID (only for non-SC-QAM channels)
+  to make room; with history enabled the table section is two columns wide.
+- Error-rate counters and the channel history are stored in `/data`, so they
+  survive app restarts.
+
 ## 1.5.0 — 2026-11-11
 
 ### Changed

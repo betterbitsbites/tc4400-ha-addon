@@ -54,3 +54,6 @@ configuration:
     description: auto = ICMP ping, TCP connect if ICMP is not possible; icmp; tcp
   latency_tcp_port:
     name: TCP port for the TCP method
+  history_length:
+    name: Channel history (scrapes)
+    description: Number of scrapes kept per channel for the trend sparklines in the channel table (0 = off)

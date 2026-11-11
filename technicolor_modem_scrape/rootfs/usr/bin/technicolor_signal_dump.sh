@@ -24,6 +24,7 @@
 #    locked channel counts), with SC-QAM and OFDM counted separately.
 #  * TCP latency, last boot timestamp, uptime in seconds, DOCSIS/software version,
 #    error rates per minute, channel lists as attributes, optional dashboard button.
+#  * Short per-channel history of the last scrapes (HISTORY_LENGTH, default 30).
 
 # Optional config file (shell syntax, KEY="value")
 if [ -n "$1" ] && [ -f "$1" ]; then
@@ -295,6 +296,7 @@ ds_list=""
 ds_count=0
 us_list=""
 us_count=0
+hist_in=""   # per channel values for the short history (sparklines)
 while read -r line; do
 	[ -z "$line" ] && continue
 	to_parse=$(echo "$line" | sed 's/<th[^>]*>[^<]*<\/th><\/tr>//g;s/^<td>//g;s/<\/td>$//g;s/<\/td><td[^>]*>/\t/g')
@@ -339,6 +341,7 @@ while read -r line; do
 	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting downstream channel status to topic ${state_topic}" ; exit 20 ; }
 	ds_list+="${ds_list:+, }$(echo "$state_message" | sed -E 's/"noerr": [^,]*, //')"
 	ds_count=$((ds_count+1))
+	hist_in+="D"$'\t'"$(echo "$to_parse" | awk -F'\t' '{ print $2"\t"$8"\t"$13 }')"$'\n'
 done < <(echo "$downstream_rows" | tail -n +3)
 
 echo "Parsing upstream channels"
@@ -378,6 +381,7 @@ while read -r line; do
 	mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting upstream channel status to topic ${state_topic}" ; exit 20 ; }
 	us_list+="${us_list:+, }$(echo "$state_message" | sed -E "s/^\\{ /{ \"channel\": ${index}, /")"
 	us_count=$((us_count+1))
+	hist_in+="U"$'\t'"$(echo "$to_parse" | awk -F'\t' '{ print $2"\t"$8 }')"$'\n'
 done < <(echo "$upstream_rows" | tail -n +3)
 
 ###########################################
@@ -473,6 +477,64 @@ mqtt_pub -r "${state_topic}" "{ \"count\": ${ds_count}, \"channels\": [ ${ds_lis
 state_topic="${mqtt_topic}/channels_up"
 pubConfigMessage "Summary" ${state_topic} "channels_up" "count" "Upstream Channel List" "measurement" "" "" "attr"
 mqtt_pub -r "${state_topic}" "{ \"count\": ${us_count}, \"channels\": [ ${us_list} ] }" || { echoerr "MQTT error posting upstream channel list" ; exit 20 ; }
+
+# Short history per channel: the last HISTORY_LENGTH scrapes (default 30, 0 = off).
+# Downstream: SNR and uncorrectable errors per scrape; upstream: transmit power.
+# Kept in a state file, published as attributes of the "Channel History" sensor
+# (used for the sparklines in the dashboard's channel table).
+history_length="${HISTORY_LENGTH:-30}"
+if [ "${history_length}" -gt 0 ] 2>/dev/null; then
+	history_file="${STATE_DIR:-/tmp}/technicolor_${modem_id}_history"
+	[ -f "$history_file" ] || : > "$history_file" 2>/dev/null
+	hist_json=$(printf '%s' "$hist_in" | awk -F'\t' -v n="$history_length" -v hfile="$history_file" -v out="${history_file}.new" '
+		function num(x) { return x ~ /^-?[0-9]+(\.[0-9]+)?$/ }
+		function push(list, x, max,    k, a, i, s) {
+			s = (list == "" ? "" : list ",") (num(x) ? x : "")
+			k = split(s, a, ",")
+			if (k > max) { s = ""; for (i = k - max + 1; i <= k; i++) s = s (s == "" && i == k - max + 1 ? "" : ",") a[i] }
+			return s
+		}
+		function jarr(list,    k, a, i, s) {
+			if (list == "") return "[]"
+			k = split(list, a, ","); s = "["
+			for (i = 1; i <= k; i++) s = s (i > 1 ? ", " : "") (a[i] == "" ? "null" : a[i])
+			return s "]"
+		}
+		function deltas(list,    k, a, i, s) {   # totals -> increase per scrape
+			k = split(list, a, ","); s = "["
+			for (i = 2; i <= k; i++)
+				s = s (i > 2 ? ", " : "") ((a[i] == "" || a[i-1] == "" || a[i] + 0 < a[i-1] + 0) ? "null" : a[i] - a[i-1])
+			return s "]"
+		}
+		BEGIN {
+			while ((getline line < hfile) > 0) {
+				split(line, f, "\t")
+				if (f[1] == "N") scrapes = f[2]
+				else if (f[1] == "D") { dsnr[f[2]] = f[3]; dun[f[2]] = f[4] }
+				else if (f[1] == "U") upw[f[2]] = f[3]
+			}
+			close(hfile)
+		}
+		$1 == "D" && $2 != "" { id = $2; nd++; dorder[nd] = id; s1[id] = push(dsnr[id], $3, n); s2[id] = push(dun[id], $4, n + 1) }
+		$1 == "U" && $2 != "" { id = $2; nu++; uorder[nu] = id; s3[id] = push(upw[id], $3, n) }
+		END {
+			scrapes = (scrapes + 1 > n) ? n : scrapes + 1
+			print "N\t" scrapes > out
+			for (i = 1; i <= nd; i++) { id = dorder[i]; print "D\t" id "\t" s1[id] "\t" s2[id] > out }
+			for (i = 1; i <= nu; i++) { id = uorder[i]; print "U\t" id "\t" s3[id] > out }
+			close(out)
+			printf "{ \"scrapes\": %d, \"length\": %d, \"down\": {", scrapes, n
+			for (i = 1; i <= nd; i++) { id = dorder[i]; printf "%s \"%s\": { \"snr\": %s, \"uncorr\": %s }", (i > 1 ? "," : ""), id, jarr(s1[id]), deltas(s2[id]) }
+			printf " }, \"up\": {"
+			for (i = 1; i <= nu; i++) { id = uorder[i]; printf "%s \"%s\": { \"power\": %s }", (i > 1 ? "," : ""), id, jarr(s3[id]) }
+			printf " } }"
+		}') && mv -f "${history_file}.new" "$history_file" 2>/dev/null
+	if [ -n "$hist_json" ]; then
+		state_topic="${mqtt_topic}/channel_history"
+		pubConfigMessage "Summary" ${state_topic} "channel_history" "scrapes" "Channel History" "measurement" "" "" "attr"
+		mqtt_pub -r "${state_topic}" "${hist_json}" || { echoerr "MQTT error posting channel history" ; exit 20 ; }
+	fi
+fi
 
 # "Create Dashboard" button (only when a dashboard generator listens, i.e. in the app)
 if [ -n "${DASHBOARD_COMMAND_TOPIC}" ]; then

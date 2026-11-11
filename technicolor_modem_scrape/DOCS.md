@@ -29,6 +29,7 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 | `mqtt_topic_prefix` | `homeassistant/sensor` | MQTT discovery prefix |
 | `mqtt_uid_prefix` | `cablemodem` | Prefix for unique IDs |
 | `verbose` | `false` | Log the full scraper output on every run |
+| `history_length` | `30` | Scrapes kept per channel for the trend sparklines in the channel table (`0` = off) |
 | `dashboard_title` | `Cable modem` | Title of the generated dashboard |
 | `dashboard_url` | `cable-modem` | Dashboard that is created when *Dashboard Target* is set to *New: …* (URL must contain a hyphen) |
 | `dashboard_cards` | `auto` | `auto`: use plotly-graph / apexcharts-card if installed; `builtin`: only built-in cards; `hacs`: always use them |
@@ -57,6 +58,10 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
   in blue (🔵) without SC-QAM thresholds.
 - **Downstream / Upstream Channel List**: number of channels, with all channels
   as the `channels` attribute (used by the dashboard's spectrum charts and tables)
+- **Channel History**: the last `history_length` scrapes per channel as attributes
+  (downstream SNR and uncorrectable errors per scrape, upstream power), shown as
+  sparklines in the channel table. With 30 scrapes and ~30 channels this is about
+  8 KB per scrape in the recorder; set `history_length` to `0` if you don't need it.
 - **Create Dashboard** (button): builds the dashboard, see below
 - **Internet Latency** device: one sensor set per latency target, see below
 
@@ -109,7 +114,7 @@ Take control*. YAML dashboards can't be changed by the app.
 | Signal now | Gauges: worst SNR, highest upstream power, downstream power range | same |
 | Internet latency | Status line per target (average, P95, min/max, jitter, loss) and history graph | Chart with min–max shading, average, base latency and congestion threshold (*apexcharts-card*) |
 | Channels (spectrum) | – | Fritz!Box-style bars per channel along the frequency band: downstream power, downstream SNR, upstream power — coloured green/yellow/red (*plotly-graph*) |
-| Channel table | Table of all channels with 🟢🟡🔴 markers | same |
+| Channel table | Table of all channels with 🟢🟡🔴 markers and sparklines of the last 30 scrapes (SNR, uncorrectable errors, upstream power) | same |
 | Upstream / Downstream | History graphs | Charts with coloured good/warning/bad ranges (*apexcharts-card*) |
 | Errors | Corrected/uncorrectable per hour/day | Columns per hour (*apexcharts-card*) |
 | Modem latency | History graph | Chart (*apexcharts-card*) |

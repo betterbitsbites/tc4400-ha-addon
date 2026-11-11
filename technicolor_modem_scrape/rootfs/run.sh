@@ -11,6 +11,9 @@ export MODEM_PASSWORD="$(bashio::config 'modem_password')"
 export MQTT_TOPIC_PREFIX="$(bashio::config 'mqtt_topic_prefix')"
 export MQTT_UID_PREFIX="$(bashio::config 'mqtt_uid_prefix')"
 interval="$(bashio::config 'scan_interval')"
+export HISTORY_LENGTH="$(bashio::config 'history_length' '30')"
+# counters and channel history survive app restarts
+export STATE_DIR="/data"
 
 if bashio::config.has_value 'mqtt_host'; then
     bashio::log.info "Using manually configured MQTT broker"
