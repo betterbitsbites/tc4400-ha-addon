@@ -2,6 +2,15 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.8.1 — 2026-11-11
+
+### Changed
+- Dashboard *Connection* section: new **SC-QAM vs OFDM** table side by side —
+  channels, worst/average SNR, uncorrectable and corrected errors per minute and
+  since the modem booted. Uncorrectable errors happening right now are red.
+  The mixed "Uncorrectable / min" tile is replaced by a *Modem response* tile.
+- Gauge label "SNR worst (SC-QAM)" again.
+
 ## 1.8.0 — 2026-11-11
 
 ### Changed
