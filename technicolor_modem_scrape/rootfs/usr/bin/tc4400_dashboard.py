@@ -400,13 +400,17 @@ def apex_line(title, series, hours, bands=None, ymin=None, ymax=None, decimals=1
     return full(card)
 
 
-def apex_columns(title, entity, name, hours, color):
+def apex_columns(title, rate_entity, name, hours, color):
+    """Errors per hour as columns, from a per-minute rate sensor (average per hour
+    x 60). The rate is already reset-safe (modem reboot, counter reset), unlike
+    differences of the totals, which turn negative when the modem restarts."""
     return full({
         "type": "custom:apexcharts-card",
         "graph_span": "%dh" % hours,
         "header": {"show": True, "title": title},
-        "series": [{"entity": entity, "name": name, "type": "column", "color": color,
-                    "group_by": {"func": "diff", "duration": "1h"}}],
+        "series": [{"entity": rate_entity, "name": name, "type": "column", "color": color,
+                    "group_by": {"func": "avg", "duration": "1h"},
+                    "transform": "return x === null ? null : Math.round(Number(x) * 60);"}],
     })
 
 
@@ -726,13 +730,17 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
 
     if inc["errors"]:
         cards = []
-        for key, title, name, color, fallback in (
-                ("uncorr", "Uncorrectable errors per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
-                ("corr", "Corrected errors per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
-                ("ofdm_uncorr", "OFDM uncorrectable codewords per hour", "OFDM uncorrectable", OFDM_BLUE, ("hour", 3))):
-            if E("summary", key):
-                cards.append(apex_columns(title, E("summary", key), name, max(hours, 72), color)
-                             if have_apex else stat_bars(title, E("summary", key), name, *fallback))
+        # ApexCharts: from the reset-safe rate sensors. Built-in fallback: long-term
+        # statistics of the totals (total_increasing, HA treats a drop as a reset).
+        for key, rate, title, name, color, fallback in (
+                ("uncorr", "uncorr_rate", "Uncorrectable errors per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
+                ("corr", "corr_rate", "Corrected errors per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
+                ("ofdm_uncorr", "ofdm_uncorr_rate", "OFDM uncorrectable codewords per hour", "OFDM uncorrectable",
+                 OFDM_BLUE, ("hour", 3))):
+            if have_apex and E("summary", rate):
+                cards.append(apex_columns(title, E("summary", rate), name, max(hours, 72), color))
+            elif E("summary", key):
+                cards.append(stat_bars(title, E("summary", key), name, *fallback))
         section("Errors", cards)
 
     if inc["latency"] and E("status", "latency"):

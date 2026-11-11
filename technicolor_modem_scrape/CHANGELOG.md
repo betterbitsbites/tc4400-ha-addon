@@ -2,6 +2,21 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.6.1 — 2026-11-11
+
+### Fixed
+- **Modem restarts and counter resets** no longer cause gaps or wrong spikes in
+  the error rates. Rates are now calculated per channel: a counter that went
+  down was reset, so its current value counts as the errors since the reset
+  (never a negative value). A modem reboot is detected from the smaller uptime;
+  the rate is then based on the time since the boot. Channels that appear or
+  disappear no longer distort the sum.
+- Channel table trend: a reset now shows the errors since the reset instead of
+  a gap.
+- Dashboard error charts (ApexCharts) are built from the reset-safe rate sensors
+  instead of differences of the totals, which turned negative after a reboot.
+  Press *Create Dashboard* again to update them.
+
 ## 1.6.0 — 2026-11-11
 
 ### Added

@@ -306,7 +306,7 @@ while read -r line; do
 	# Sensor IDs follow the channel ID, independent of the ordering on the page
 	index=$(echo "$to_parse" | awk -F'\t' '{print $2}')
 	state_topic="${mqtt_topic}/downstream${index}"
-	sum_down+="$(echo "$to_parse" | awk -F'\t' '{ print $3"\t"$8"\t"$9"\t"$12"\t"$13"\t"$4 }')"$'\n'
+	sum_down+="$(echo "$to_parse" | awk -F'\t' '{ print $3"\t"$8"\t"$9"\t"$12"\t"$13"\t"$4"\t"$2 }')"$'\n'
 
 	echo "Publishing downstream channel ${index}"
 	pubConfigMessage "Down ${index}" ${state_topic} "downstream${index}" "id" "ID"
@@ -414,7 +414,7 @@ pubConfigMessage "Summary" ${state_topic} "summary" "up_power_min" "Upstream Pow
 pubConfigMessage "Summary" ${state_topic} "summary" "up_power_max" "Upstream Power Max" "measurement" "dBmV"
 
 # Numeric aggregates; fields that are empty or non-numeric are skipped.
-# Record per downstream channel: lock, snr, power, corrected, uncorrectable, type
+# Record per downstream channel: lock, snr, power, corrected, uncorrectable, type, id
 state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
 	function num(x) { return x ~ /^-?[0-9]+(\.[0-9]+)?$/ }
 	function v(x)   { return x == "" ? "null" : x }
@@ -445,28 +445,51 @@ state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
 		printf "\"ofdm_channels\": %d, \"ofdm_snr_min\": %s, \"ofdm_corr\": %s, \"ofdm_uncorr\": %s, ", on, v(osmin), on ? sprintf("%.0f", oc) : "null", on ? sprintf("%.0f", ou) : "null"
 		printf "\"up_channels\": %d, \"up_locked\": %d, \"up_power_min\": %s, \"up_power_max\": %s }", un, ul, v(upmin), v(upmax)
 	}')
-# Error rates per minute since the previous run (null on first run or after a counter reset)
-jnum() { echo "$state_message" | sed -nE "s/.*\"$1\": ([0-9]+).*/\1/p"; }
-counters="$(jnum corr) $(jnum uncorr) $(jnum ofdm_corr) $(jnum ofdm_uncorr)"
+# Error rates per minute since the previous run, calculated per channel:
+#  * counter went down       -> it was reset; the current value counts as the
+#                               errors since the reset (never a negative rate)
+#  * modem rebooted          -> uptime is smaller than before: all counters
+#                               restarted at 0, the rate is based on the time
+#                               since the boot instead of the whole interval
+#  * channel new/disappeared -> left out, so it can't distort the sum
+# State file: "T epoch uptime" plus "C id type corrected uncorrectable" per channel.
 counter_file="${STATE_DIR:-/tmp}/technicolor_${modem_id}_counters"
 now_epoch=$(date +%s)
-previous=""
-[ -f "$counter_file" ] && previous=$(cat "$counter_file")
-rates=$(awk -v now="$now_epoch $counters" -v prev="$previous" '
+[ -f "$counter_file" ] || : > "$counter_file" 2>/dev/null
+rates=$(printf '%s' "$sum_down" | awk -F'\t' -v now="$now_epoch" -v up="${uptime_s}" -v sfile="$counter_file" -v out="${counter_file}.new" '
+	function num(x) { return x ~ /^[0-9]+$/ }
+	function delta(cur, prev) {
+		if (!num(cur)) return ""
+		if (reboot) return cur                  # counted since the boot
+		if (!num(prev)) return ""               # new channel: no baseline yet
+		return (cur + 0 >= prev + 0) ? cur - prev : cur   # smaller = reset
+	}
 	BEGIN {
-		n = split(now, a, " "); m = split(prev, b, " ")
-		dt = a[1] - b[1]
-		out = ""
-		for (i = 2; i <= 5; i++) {
-			r = "null"
-			if (m >= i && dt > 0 && a[i] != "" && b[i] != "" && a[i] + 0 >= b[i] + 0)
-				r = sprintf("%.2f", (a[i] - b[i]) * 60 / dt)
-			out = out (i > 2 ? " " : "") r
+		while ((getline line < sfile) > 0) {
+			split(line, f, " ")
+			if (f[1] == "T") { pt = f[2]; pup = f[3] }
+			else if (f[1] == "C") { pc[f[2]] = f[4]; pu[f[2]] = f[5]; known = 1 }
 		}
-		print out
-	}')
-echo "$now_epoch $counters" > "$counter_file" 2>/dev/null
-read -r r_corr r_uncorr r_ocorr r_ouncorr <<< "$rates"
+		close(sfile)
+		reboot = (num(up) && num(pup) && up + 0 < pup + 0)
+		elapsed = reboot ? up : now - pt
+		valid = (pt != "" && elapsed > 0 && (known || reboot))
+		print "T " now " " up > out
+	}
+	NF >= 7 && $7 != "" {
+		id = $7; g = ($6 ~ /OFDM/) ? "o" : "s"
+		print "C " id " " ($6 == "" ? "-" : $6) " " $4 " " $5 > out
+		dc = delta($4, pc[id]); du = delta($5, pu[id])
+		if (dc != "") { sc[g] += dc; nc[g]++ }
+		if (du != "") { su[g] += du; nu[g]++ }
+	}
+	function rate(sum, n) { return (valid && n > 0) ? sprintf("%.2f", sum * 60 / elapsed) : "null" }
+	END {
+		close(out)
+		print rate(sc["s"], nc["s"]), rate(su["s"], nu["s"]), rate(sc["o"], nc["o"]), rate(su["o"], nu["o"]), (reboot ? "reboot" : "-")
+	}') && mv -f "${counter_file}.new" "$counter_file" 2>/dev/null
+read -r r_corr r_uncorr r_ocorr r_ouncorr r_reboot <<< "$rates"
+[ "$r_reboot" == "reboot" ] && echo "Modem was restarted since the last scrape (uptime ${uptime_s} s) - error rates based on the time since the boot"
 state_message="${state_message% \}}, \"corr_rate\": ${r_corr}, \"uncorr_rate\": ${r_uncorr}, \"ofdm_corr_rate\": ${r_ocorr}, \"ofdm_uncorr_rate\": ${r_ouncorr} }"
 mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting summary to topic ${state_topic}" ; exit 20 ; }
 
@@ -500,10 +523,10 @@ if [ "${history_length}" -gt 0 ] 2>/dev/null; then
 			for (i = 1; i <= k; i++) s = s (i > 1 ? ", " : "") (a[i] == "" ? "null" : a[i])
 			return s "]"
 		}
-		function deltas(list,    k, a, i, s) {   # totals -> increase per scrape
+		function deltas(list,    k, a, i, s) {   # totals -> increase per scrape (smaller = reset: count the new value)
 			k = split(list, a, ","); s = "["
 			for (i = 2; i <= k; i++)
-				s = s (i > 2 ? ", " : "") ((a[i] == "" || a[i-1] == "" || a[i] + 0 < a[i-1] + 0) ? "null" : a[i] - a[i-1])
+				s = s (i > 2 ? ", " : "") ((a[i] == "" || a[i-1] == "") ? "null" : (a[i] + 0 < a[i-1] + 0 ? a[i] : a[i] - a[i-1]))
 			return s "]"
 		}
 		BEGIN {

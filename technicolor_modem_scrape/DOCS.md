@@ -51,7 +51,9 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
   modulation, lock/bonding status, corrected/uncorrectable errors (downstream)
 - **Summary**: channel and locked-channel counts, downstream/upstream power ranges,
   and — separately for **SC-QAM** and **OFDM** — worst SNR (SC-QAM also average),
-  error totals and errors per minute. OFDM channels count codewords at a far
+  error totals and errors per minute. Error rates are calculated per channel and
+  handle modem restarts and counter resets (a counter that goes down counts as
+  reset, never as a negative value). OFDM channels count codewords at a far
   higher rate and the TC4400 reports their SNR differently, so they get their own
   sensors (*OFDM SNR Min*, *OFDM Corrected/Uncorrectable Codewords*, *… per
   Minute*) instead of distorting the SC-QAM values. The dashboard shows OFDM SNR
