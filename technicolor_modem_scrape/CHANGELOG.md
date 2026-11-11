@@ -2,6 +2,18 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.7.2 — 2026-11-11
+
+### Fixed
+- **Power switch/sensor dropdowns, Restart Modem button and Last Power Cycle
+  sensor did not appear** on installations with many switches: the dropdown
+  with all switches exceeded the 128 KB limit of a command line argument and
+  the publish failed. MQTT messages are now passed via stdin.
+- The dropdowns, the button and *Dashboard Target* are published independently,
+  so a failure in one part no longer hides the others; errors are logged.
+- First publish 20 s after the app start instead of 90 s, retried every 30 s
+  until it succeeds (instead of waiting 10 minutes).
+
 ## 1.7.1 — 2026-11-11
 
 ### Added

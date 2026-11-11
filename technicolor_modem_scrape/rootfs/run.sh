@@ -43,6 +43,7 @@ RESTART_TOPIC="tc4400_scraper/modem/restart"
 dashboard() {
     python3 /usr/bin/tc4400_dashboard.py "$@" 2>&1 |
         while IFS= read -r line; do bashio::log.info "[dashboard] ${line}"; done
+    return "${PIPESTATUS[0]}"
 }
 dashboard_listener() {
     local auth=()
@@ -89,11 +90,17 @@ dashboard_listener &
 ) &
 
 # Keep the list of dashboards in the "Dashboard Target" select up to date
+# and publish the power switch/sensor dropdowns, Restart Modem and Last Power Cycle
 (
-    sleep 90   # first scrape has registered the device by then
+    sleep 20
+    # until it works once (the first scrape must have registered the device)
+    for _ in $(seq 1 40); do
+        dashboard refresh && break
+        sleep 30
+    done
     while true; do
-        dashboard refresh
         sleep 600
+        dashboard refresh
     done
 ) &
 

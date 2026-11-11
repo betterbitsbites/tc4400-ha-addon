@@ -265,15 +265,20 @@ def mqtt_publish(topic, payload, retain=True):
     if os.environ.get("DRY_RUN") == "1":
         print("[dry-run] %s%s: %s" % ("-r " if retain else "", topic, message), flush=True)
         return
+    # message via stdin (-s): a select with hundreds of options can exceed the
+    # 128 KB limit of a single command line argument
     cmd = ["mosquitto_pub", "-h", os.environ.get("MQTT_HOST", "127.0.0.1"),
-           "-p", str(os.environ.get("MQTT_PORT") or 1883), "-t", topic, "-m", message]
+           "-p", str(os.environ.get("MQTT_PORT") or 1883), "-t", topic]
+    cmd += ["-s"] if message else ["-n"]   # -n: empty message (removes a retained config)
     if retain:
         cmd.append("-r")
     if os.environ.get("MQTT_USERNAME"):
         cmd += ["-u", os.environ["MQTT_USERNAME"]]
     if os.environ.get("MQTT_PASSWORD"):
         cmd += ["-P", os.environ["MQTT_PASSWORD"]]
-    subprocess.run(cmd, check=True, timeout=15, capture_output=True)
+    r = subprocess.run(cmd, input=message.encode(), timeout=15, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError("mosquitto_pub to %s failed: %s" % (topic, r.stderr.decode(errors="replace").strip()))
 
 
 # --------------------------------------------------------------------------
@@ -421,6 +426,7 @@ def publish_power(ha, modem_id):
         if current and state is None:  # chosen entity is gone: keep it visible
             state = "missing (%s)" % current
             labels.append(state)
+        log("%s: %d choice(s)" % (name, len(labels) - 1))
         mqtt_publish("%s/select/%s_power_%s/config" % (disc, modem_id, kind), {
             "name": name, "unique_id": "%s_power_%s" % (modem_id, kind),
             "command_topic": "%s/%s/set" % (POWER_TOPIC, kind), "state_topic": "%s/%s" % (POWER_TOPIC, kind),
@@ -1320,17 +1326,33 @@ def cmd_create(payload):
 
 
 def cmd_refresh():
+    """Publish the selects and the power entities. Every part on its own, so one
+    failure doesn't hide the others; exit code 1 if something failed."""
     settings = load_settings("")
     ha = connect()
+    failed = []
     try:
         serial, _ = find_entities(ha.call("config/entity_registry/list"), settings["uid_prefix"])
-        targets = dashboard_targets(ha, settings)
-        state = publish_target_select(ha, settings, settings["uid_prefix"] + serial, targets)
-        log("Dashboard Target: %d choice(s), current: %s" % (len(targets), state))
-        power = publish_power(ha, settings["uid_prefix"] + serial)
-        log("Modem power switch: %s, sensor: %s" % (power.get("switch") or "none", power.get("sensor") or "none"))
+        modem_id = settings["uid_prefix"] + serial
+        try:
+            targets = dashboard_targets(ha, settings)
+            state = publish_target_select(ha, settings, modem_id, targets)
+            log("Dashboard Target: %d choice(s), current: %s" % (len(targets), state))
+        except Exception as e:
+            failed.append("Dashboard Target: %s" % e)
+        try:
+            power = publish_power(ha, modem_id)
+            log("Modem power switch: %s, sensor: %s%s" % (
+                power.get("switch") or "none", power.get("sensor") or "none",
+                " - Restart Modem button and Last Power Cycle published" if power.get("switch") else ""))
+        except Exception as e:
+            failed.append("modem power entities: %s" % e)
     finally:
         ha.ws.close()
+    for f in failed:
+        log("ERROR: %s" % f)
+    if failed:
+        sys.exit(1)
 
 
 def cmd_select(label):
