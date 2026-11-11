@@ -234,4 +234,4 @@ curl -s -o /dev/null -w '%{http_code}\n' --connect-timeout 5 http://192.168.100.
 OpenWrt the router needs a virtual IP in the modem's subnet plus an outbound NAT
 rule (and optionally a static ARP entry). Step by step, with tests and
 troubleshooting:
-**[Reaching the modem's web interface](https://github.com/coaxx77/tc4400-ha-addon/blob/main/MODEM_ACCESS.md)**
+**[Reaching the modem's web interface](https://github.com/betterbitsbites/tc4400-ha-addon/blob/main/MODEM_ACCESS.md)**

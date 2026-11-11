@@ -5,13 +5,13 @@
 # One-command installer for any systemd-based Linux host (Debian/Ubuntu/Proxmox LXC,
 # Fedora, Alpine without systemd is not supported).
 #
-#   curl -fsSL https://raw.githubusercontent.com/coaxx77/tc4400-ha-addon/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/betterbitsbites/tc4400-ha-addon/main/install.sh | sudo bash
 #
 # Installs the scraper, asks for modem/MQTT settings, and runs it every 5 minutes
 # via a systemd timer. Re-run to change settings; run with --uninstall to remove.
 set -euo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/coaxx77/tc4400-ha-addon/main"
+REPO_RAW="https://raw.githubusercontent.com/betterbitsbites/tc4400-ha-addon/main"
 BIN=/usr/local/bin/technicolor_signal_dump.sh
 CONF=/etc/technicolor-modem-scrape.conf
 UNIT=technicolor-modem-scrape

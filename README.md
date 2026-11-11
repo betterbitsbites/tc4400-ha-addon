@@ -15,7 +15,7 @@ It is in turn based on the Arris and Netgear modem scrapers by
 **[mmiller7](https://github.com/mmiller7)** ([Arris_modem_scrape](https://github.com/mmiller7/Arris_modem_scrape),
 [Netgear_modem_scrape](https://github.com/mmiller7/Netgear_modem_scrape)).
 The Home Assistant add-on packaging, installer and refactoring in this repository
-were added by [coaxx77](https://github.com/coaxx77).
+were added by [betterbitsbites](https://github.com/betterbitsbites).
 
 Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), like the original.
 
@@ -49,8 +49,8 @@ Requirements:
   ARP entry on the router: **[Reaching the modem's web interface](MODEM_ACCESS.md)**
 
 1. **Settings → Apps → app store → ⋮ → Repositories** (before Home Assistant 2026.11:
-   *Settings → Add-ons → Add-on Store*), add `https://github.com/coaxx77/tc4400-ha-addon`
-   — or open [this link](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fcoaxx77%2Ftc4400-ha-addon)
+   *Settings → Add-ons → Add-on Store*), add `https://github.com/betterbitsbites/tc4400-ha-addon`
+   — or open [this link](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbetterbitsbites%2Ftc4400-ha-addon)
 2. Install **Technicolor TC4400 Modem Scraper**.
 3. On the **Configuration** tab, enter your modem password if you changed it
    from the default `bEn2o#US9s`.
@@ -79,7 +79,7 @@ Runs on any Debian/Ubuntu/Fedora machine, Proxmox LXC, Raspberry Pi, etc. that c
 reach both the modem and the MQTT broker:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coaxx77/tc4400-ha-addon/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/betterbitsbites/tc4400-ha-addon/main/install.sh | sudo bash
 ```
 
 The installer installs `curl` + `mosquitto-clients`, asks for modem and MQTT
