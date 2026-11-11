@@ -826,6 +826,7 @@ def apex_columns(title, rate_entity, name, hours, color):
         "type": "custom:apexcharts-card",
         "graph_span": "%dh" % hours,
         "header": {"show": True, "title": title},
+        "yaxis": [{"min": 0, "decimals": 0}],
         "series": [{"entity": rate_entity, "name": name, "type": "column", "color": color,
                     "group_by": {"func": "avg", "duration": "1h"},
                     "transform": "return x === null ? null : Math.round(Number(x) * 60);"}],
@@ -1188,7 +1189,10 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
                 ("uncorr", "uncorr_rate", "Uncorrectable errors per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
                 ("corr", "corr_rate", "Corrected errors per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
                 ("ofdm_uncorr", "ofdm_uncorr_rate", "OFDM uncorrectable codewords per hour", "OFDM uncorrectable",
-                 OFDM_BLUE, ("hour", 3))):
+                 OFDM_BLUE, ("hour", 3)),
+                # corrected codewords are normal on OFDM (LDPC); useful to compare before/after
+                ("ofdm_corr", "ofdm_corr_rate", "OFDM corrected codewords per hour", "OFDM corrected",
+                 "#90caf9", ("day", 30))):
             if have_apex and E("summary", rate):
                 cards.append(apex_columns(title, E("summary", rate), name, max(hours, 72), color))
             elif E("summary", key):

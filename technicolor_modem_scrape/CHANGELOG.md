@@ -2,6 +2,20 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.7.3 — 2026-11-11
+
+### Added
+- Dashboard: **OFDM corrected codewords per hour** chart. Corrected codewords
+  are normal on OFDM (LDPC), but the chart is useful to compare before/after
+  cabling changes. Press *Create Dashboard* again to add it.
+
+### Changed
+- Error charts show whole numbers on the y-axis (no more `20000000.0`).
+
+### Note
+- Error history recorded before 1.5.0 still contains OFDM codewords in the
+  SC-QAM rate sensors (very large bars); it ages out of the charts.
+
 ## 1.7.2 — 2026-11-11
 
 ### Fixed
