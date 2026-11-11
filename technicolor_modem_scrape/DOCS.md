@@ -29,6 +29,7 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 | `mqtt_topic_prefix` | `homeassistant/sensor` | MQTT discovery prefix |
 | `mqtt_uid_prefix` | `cablemodem` | Prefix for unique IDs |
 | `verbose` | `false` | Log the full scraper output on every run |
+| `restart_off_seconds` | `15` | How long *Restart Modem* keeps the power switch off |
 | `history_length` | `30` | Scrapes kept per channel for the trend sparklines in the channel table (`0` = off) |
 | `dashboard_title` | `Cable modem` | Title of the generated dashboard |
 | `dashboard_url` | `cable-modem` | Dashboard that is created when *Dashboard Target* is set to *New: …* (URL must contain a hyphen) |
@@ -66,6 +67,38 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
   8 KB per scrape in the recorder; set `history_length` to `0` if you don't need it.
 - **Create Dashboard** (button): builds the dashboard, see below
 - **Internet Latency** device: one sensor set per latency target, see below
+
+## Modem power: restart and power draw
+
+If the modem hangs on a smart plug (or any `switch` entity), the app can
+power-cycle it and show its power draw. On the TC4400 device page, section
+*Configuration*:
+
+- **Modem Power Switch** — the switch the modem is plugged into
+- **Modem Power Sensor** — optional, a power sensor (W) for the modem's draw
+
+Once a switch is chosen, the device gets:
+
+- **Restart Modem** (button) — switches off, waits `restart_off_seconds`, switches
+  on and checks that the switch really is on again (up to 6 attempts; if it stays
+  off you get an alarm notification). A second restart within 3 minutes is
+  refused. The dashboard button asks for confirmation.
+- **Last Power Cycle** (timestamp) — the last time the switch went **off → on**,
+  **no matter who switched it**: the button, an automation or script, a user in
+  the UI, or the button on the plug itself. Attributes: `off_at`, `on_at`,
+  `off_seconds` and `source` (*Restart Modem button (app)*, *user <name>*,
+  *automation or script*, *device or integration*). The app follows the switch
+  continuously and, after a restart of the app, fills in the last power cycle
+  from the switch's history (last 30 days).
+
+The modem's own *Last Boot* sensor additionally covers every reboot, including
+power failures or a restart by the provider.
+
+> **Use a switch that works locally** (Zigbee, Z-Wave, Shelly, Tasmota, ESPHome,
+> Matter, …). A plug that is switched through a cloud may not come back on once
+> the modem — and with it the internet — is off. The app warns when the chosen
+> switch belongs to a known cloud integration. Never choose a switch that also
+> powers Home Assistant, the router or the network path to the switch.
 
 ## Internet latency
 
@@ -113,6 +146,7 @@ Take control*. YAML dashboards can't be changed by the app.
 | Section | Built-in cards | With extra cards |
 |---|---|---|
 | Status | Connectivity, DOCSIS, uptime, last boot, latency, locked channels, errors | same |
+| Modem power | Restart button with confirmation, switch state (read-only), power draw with 24 h graph, last power cycle and who triggered it, last modem boot | same |
 | Signal now | Gauges: worst SNR, highest upstream power, downstream power range | same |
 | Internet latency | Status line per target (average, P95, min/max, jitter, loss) and history graph | Chart with min–max shading, average, base latency and congestion threshold (*apexcharts-card*) |
 | Channels (spectrum) | – | Fritz!Box-style bars per channel along the frequency band: downstream power, downstream SNR, upstream power — coloured green/yellow/red (*plotly-graph*) |
@@ -149,7 +183,7 @@ data:
 ```
 
 All keys are optional. `url_path` overrides the *Dashboard Target* (`lovelace` = the
-*Overview* dashboard). `include` accepts `status`, `gauges`, `internet`,
+*Overview* dashboard). `include` accepts `status`, `power`, `gauges`, `internet`,
 `spectrum`, `channel_table`, `upstream`, `downstream`, `errors`, `latency`
 (modem latency). `latency_hours` (default 3) is the time range of the internet
 latency charts. With several modems

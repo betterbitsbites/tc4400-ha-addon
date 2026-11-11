@@ -57,3 +57,6 @@ configuration:
   history_length:
     name: Channel history (scrapes)
     description: Number of scrapes kept per channel for the trend sparklines in the channel table (0 = off)
+  restart_off_seconds:
+    name: Modem restart - off time (seconds)
+    description: How long the "Restart Modem" button keeps the modem power switch off

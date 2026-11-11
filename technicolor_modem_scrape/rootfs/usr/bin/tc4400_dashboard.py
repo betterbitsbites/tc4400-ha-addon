@@ -6,6 +6,10 @@ Part of the Technicolor TC4400 Modem Scraper app. Scraper by Philipp Reichmuth
 
 Usage:
   tc4400_dashboard.py create [PAYLOAD]   build the dashboard view
+  tc4400_dashboard.py power-switch LABEL choose the modem power switch (select)
+  tc4400_dashboard.py power-sensor LABEL choose the power draw sensor (select)
+  tc4400_dashboard.py restart            power-cycle the modem via the switch
+  tc4400_dashboard.py watch              follow the switch, record every power cycle
   tc4400_dashboard.py refresh            publish the "Dashboard Target" select
                                          with the current list of dashboards
   tc4400_dashboard.py select LABEL       store the dashboard chosen in the select
@@ -39,6 +43,8 @@ import socket
 import struct
 import subprocess
 import sys
+import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 OPTIONS_FILE = "/data/options.json"
@@ -47,7 +53,16 @@ TARGET_FILE = os.path.join(DATA_DIR, "dashboard_target.json")
 TOPIC_BASE = "tc4400_scraper/dashboard"
 VIEW_PATH = "tc4400"
 DEFAULT_DASHBOARD = "lovelace"   # the built-in "Overview" dashboard
-SECTIONS = ("status", "gauges", "internet", "spectrum", "channel_table", "upstream",
+POWER_FILE = os.path.join(DATA_DIR, "modem_power.json")
+POWER_TOPIC = "tc4400_scraper/power"
+RESTART_TOPIC = "tc4400_scraper/modem/restart"
+NONE_LABEL = "— none —"
+RESTART_COOLDOWN = 180           # seconds between two power cycles
+# integrations that switch through a cloud: after "off" the internet is gone and
+# "on" may never arrive, so the user gets a warning when choosing such a switch
+CLOUD_PLATFORMS = {"tuya", "smartlife", "sonoff", "ewelink", "meross_cloud", "smartthings",
+                   "switchbot_cloud", "alexa", "google_assistant", "ifttt", "magichome_cloud"}
+SECTIONS = ("status", "power", "gauges", "internet", "spectrum", "channel_table", "upstream",
             "downstream", "errors", "latency")
 
 # Rough DOCSIS rules of thumb (256QAM downstream). Used for colours and bands.
@@ -300,6 +315,357 @@ def publish_target_select(ha, settings, modem_id, targets):
 # --------------------------------------------------------------------------
 # Entity lookup by unique_id
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Modem power: switch for power cycling, sensor for the power draw
+# --------------------------------------------------------------------------
+def load_power():
+    try:
+        with open(POWER_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def store_power(data):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(POWER_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def power_choices(ha):
+    """(switches, power sensors) as [(label, entity_id)], sorted by name."""
+    switches, sensors = [], []
+    for s in ha.call("get_states") or []:
+        eid, attrs = s.get("entity_id", ""), s.get("attributes") or {}
+        label = "%s (%s)" % (attrs.get("friendly_name") or eid, eid)
+        if eid.startswith("switch."):
+            switches.append((label, eid))
+        elif eid.startswith("sensor.") and (attrs.get("device_class") == "power"
+                                            or attrs.get("unit_of_measurement") in ("W", "kW")):
+            sensors.append((label, eid))
+    key = lambda x: x[0].lower()
+    return sorted(switches, key=key), sorted(sensors, key=key)
+
+
+def label_to_entity(label):
+    if not label or label.strip() == NONE_LABEL:
+        return ""
+    m = re.search(r"\(((?:switch|sensor)\.[^)\s]+)\)\s*$", label)
+    return m.group(1) if m else None
+
+
+def get_state(ha, entity_id):
+    for s in ha.call("get_states") or []:
+        if s.get("entity_id") == entity_id:
+            return s
+    return None
+
+
+def notify(ha, title, message, nid="tc4400_modem_power"):
+    try:
+        ha.call("call_service", domain="persistent_notification", service="create",
+                service_data={"title": title, "message": message, "notification_id": nid})
+    except Exception as e:
+        log("could not create notification: %s" % e)
+
+
+def publish_power(ha, modem_id):
+    """Selects for switch and sensor, and the Restart Modem button (only with a switch)."""
+    power = load_power()
+    switches, sensors = power_choices(ha)
+    disc = os.environ.get("MQTT_TOPIC_PREFIX", "homeassistant/sensor").rsplit("/", 1)[0]
+    device = {"identifiers": [modem_id]}
+    for kind, choices, name, icon in (("switch", switches, "Modem Power Switch", "mdi:power-socket-eu"),
+                                      ("sensor", sensors, "Modem Power Sensor", "mdi:flash")):
+        current = power.get(kind) or ""
+        labels = [NONE_LABEL] + [c[0] for c in choices]
+        state = next((c[0] for c in choices if c[1] == current), None)
+        if current and state is None:  # chosen entity is gone: keep it visible
+            state = "missing (%s)" % current
+            labels.append(state)
+        mqtt_publish("%s/select/%s_power_%s/config" % (disc, modem_id, kind), {
+            "name": name, "unique_id": "%s_power_%s" % (modem_id, kind),
+            "command_topic": "%s/%s/set" % (POWER_TOPIC, kind), "state_topic": "%s/%s" % (POWER_TOPIC, kind),
+            "options": labels, "icon": icon, "entity_category": "config", "device": device})
+        mqtt_publish("%s/%s" % (POWER_TOPIC, kind), state or NONE_LABEL)
+    cycle_topic = "%s/sensor/%s_last_power_cycle/config" % (disc, modem_id)
+    if power.get("switch"):
+        mqtt_publish(cycle_topic, {
+            "name": "Last Power Cycle", "unique_id": "%s_last_power_cycle" % modem_id,
+            "state_topic": POWER_TOPIC + "/last_cycle", "value_template": "{{ value_json.on_at }}",
+            "json_attributes_topic": POWER_TOPIC + "/last_cycle", "device_class": "timestamp",
+            "icon": "mdi:power-cycle", "device": device})
+        if power.get("last_cycle"):
+            publish_last_cycle(power["last_cycle"])
+    else:
+        mqtt_publish(cycle_topic, "")
+    button_topic = "%s/button/%s_restart_modem/config" % (disc, modem_id)
+    if power.get("switch"):
+        mqtt_publish(button_topic, {
+            "name": "Restart Modem", "unique_id": "%s_restart_modem" % modem_id,
+            "command_topic": RESTART_TOPIC, "payload_press": "restart",
+            "icon": "mdi:restart-alert", "device": device})
+    else:
+        mqtt_publish(button_topic, "")  # removes the button
+    return power
+
+
+def cmd_power_select(kind, label):
+    entity = label_to_entity(label)
+    if entity is None:
+        raise ValueError("unknown %s choice: %s" % (kind, label))
+    power = load_power()
+    power[kind] = entity
+    store_power(power)
+    log("Modem power %s set to %s" % (kind, entity or "none"))
+    settings = load_settings("")
+    ha = connect()
+    try:
+        serial, _ = find_entities(ha.call("config/entity_registry/list"), settings["uid_prefix"])
+        publish_power(ha, settings["uid_prefix"] + serial)
+        if kind == "switch" and entity:
+            reg = {e["entity_id"]: e for e in ha.call("config/entity_registry/list")}
+            platform = (reg.get(entity) or {}).get("platform", "")
+            if platform in CLOUD_PLATFORMS:
+                notify(ha, "TC4400: check the modem power switch",
+                       "**%s** is controlled through the *%s* integration, which usually works via "
+                       "a cloud. When the modem is switched off, the internet is gone and the switch "
+                       "may not be switched on again. Use a switch that works locally (Zigbee, "
+                       "Z-Wave, Shelly, Tasmota, ESPHome, …)." % (entity, platform))
+    finally:
+        ha.ws.close()
+
+
+def cmd_restart():
+    """Power-cycle the modem: switch off, wait, switch on, verify; retries the
+    switch-on, because the modem must not stay off."""
+    power = load_power()
+    switch = power.get("switch")
+    try:
+        with open(OPTIONS_FILE) as f:
+            off_seconds = int(json.load(f).get("restart_off_seconds", 15))
+    except (OSError, ValueError):
+        off_seconds = int(os.environ.get("RESTART_OFF_SECONDS", 15))
+    ha = connect()
+    try:
+        if not switch:
+            notify(ha, "TC4400: modem not restarted",
+                   "No power switch selected. Choose one under *Modem Power Switch* on the TC4400 device.")
+            log("restart requested, but no power switch selected")
+            return
+        since = time.time() - float(power.get("last_restart", 0))
+        if since < RESTART_COOLDOWN:
+            notify(ha, "TC4400: modem not restarted",
+                   "The modem was power-cycled %d s ago. Wait at least %d s between restarts."
+                   % (since, RESTART_COOLDOWN))
+            log("restart refused: last restart %d s ago" % since)
+            return
+        state = get_state(ha, switch)
+        if state is None:
+            notify(ha, "TC4400: modem not restarted", "Power switch **%s** does not exist." % switch)
+            log("restart refused: %s does not exist" % switch)
+            return
+        if state.get("state") == "unavailable":
+            notify(ha, "TC4400: modem not restarted", "Power switch **%s** is unavailable." % switch)
+            log("restart refused: %s is unavailable" % switch)
+            return
+        power["last_restart"] = time.time()
+        store_power(power)
+        log("Restarting modem: %s off for %d s" % (switch, off_seconds))
+        notify(ha, "TC4400: restarting modem",
+               "Switching **%s** off for %d s. The internet will be down for a few minutes." % (switch, off_seconds))
+        ha.call("call_service", domain="switch", service="turn_off", target={"entity_id": switch})
+        for _ in range(10):
+            time.sleep(1)
+            s = get_state(ha, switch)
+            if s and s.get("state") == "off":
+                break
+        else:
+            log("%s did not report 'off' - switching it on again anyway" % switch)
+        time.sleep(max(0, off_seconds - 1))
+    finally:
+        ha.ws.close()
+
+    # switch on, with retries and a fresh connection each time
+    ok, last_error = False, ""
+    for attempt in range(1, 7):
+        try:
+            ha = connect()
+            try:
+                ha.call("call_service", domain="switch", service="turn_on", target={"entity_id": switch})
+                for _ in range(15):
+                    time.sleep(1)
+                    s = get_state(ha, switch)
+                    if s and s.get("state") == "on":
+                        ok = True
+                        break
+                if ok:
+                    log("%s is on again - the modem needs 2-5 minutes to resync" % switch)
+                    notify(ha, "TC4400: modem restarted",
+                           "**%s** is on again. The modem needs about 2-5 minutes to resync." % switch)
+                    try:
+                        ha.call("call_service", domain="logbook", service="log",
+                                service_data={"name": "TC4400", "entity_id": switch,
+                                              "message": "power-cycled by the TC4400 Modem Scraper app"})
+                    except Exception:
+                        pass
+                    return
+                last_error = "state is still '%s'" % (s or {}).get("state")
+            finally:
+                ha.ws.close()
+        except Exception as e:
+            last_error = str(e)
+        log("switching %s on failed (attempt %d/6): %s" % (switch, attempt, last_error))
+        time.sleep(10)
+    ha = connect()
+    try:
+        notify(ha, "TC4400: MODEM IS STILL OFF",
+               "Could not switch **%s** on again (%s). Switch it on manually!" % (switch, last_error))
+    finally:
+        ha.ws.close()
+    raise RuntimeError("could not switch %s on again: %s" % (switch, last_error))
+
+
+def iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds") if ts else None
+
+
+def parse_time(value):
+    """Epoch seconds from an ISO string or a number (compressed history format)."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def publish_last_cycle(cycle):
+    """State of the "Last Power Cycle" sensor (retained)."""
+    mqtt_publish(POWER_TOPIC + "/last_cycle", {
+        "on_at": iso(cycle.get("on")), "off_at": iso(cycle.get("off")),
+        "off_seconds": round(cycle["on"] - cycle["off"]) if cycle.get("on") and cycle.get("off") else None,
+        "source": cycle.get("source") or "unknown", "switch": cycle.get("switch")})
+
+
+def record_cycle(cycle):
+    """Store and publish a power cycle if it is newer than the known one."""
+    power = load_power()
+    known = (power.get("last_cycle") or {}).get("on") or 0
+    if cycle.get("on") and cycle["on"] > known + 1:
+        power["last_cycle"] = cycle
+        store_power(power)
+        publish_last_cycle(cycle)
+        log("Power cycle of %s: off %s, on %s (%s)" % (cycle.get("switch"), iso(cycle.get("off")),
+                                                     iso(cycle.get("on")), cycle.get("source")))
+        return True
+    return False
+
+
+def backfill_cycle(ha, switch, days=30):
+    """Last off -> on of the switch from the recorder history (app wasn't running)."""
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        hist = ha.call("history/history_during_period", start_time=start, entity_ids=[switch],
+                       minimal_response=True, no_attributes=True, significant_changes_only=False)
+    except HAError as e:
+        log("history not available: %s" % e)
+        return
+    prev_state, off_at, last = None, None, None
+    for item in (hist or {}).get(switch, []):
+        state = item.get("s", item.get("state"))
+        ts = parse_time(item.get("lu", item.get("lc", item.get("last_changed", item.get("last_updated")))))
+        if state == "off" and prev_state != "off":
+            off_at = ts
+        elif state == "on" and prev_state == "off":
+            last = {"switch": switch, "off": off_at, "on": ts, "source": "unknown (from history)"}
+        prev_state = state
+    if last:
+        record_cycle(last)
+
+
+def describe_source(ha, context, power, off_at):
+    """Who switched the modem off: this app, a user, an automation/script or the device."""
+    if off_at and abs(off_at - float(power.get("last_restart", 0))) < 30:
+        return "Restart Modem button (app)"
+    context = context or {}
+    if context.get("user_id"):
+        try:
+            users = {u["id"]: u.get("name") for u in ha.call("config/auth/list") or []}
+            return "user %s" % (users.get(context["user_id"]) or context["user_id"][:8])
+        except Exception:
+            return "user"
+    if context.get("parent_id"):
+        return "automation or script"
+    return "device or integration"
+
+
+def cmd_watch():
+    """Long-running: follow the selected power switch and record every off -> on,
+    no matter who switched it. Reconnects on errors and when the switch changes."""
+    import socket as _socket
+    while True:
+        switch = load_power().get("switch")
+        if not switch:
+            time.sleep(60)
+            continue
+        try:
+            ha = connect()
+        except Exception as e:
+            log("watcher: cannot connect: %s - retrying in 60 s" % e)
+            time.sleep(60)
+            continue
+        try:
+            backfill_cycle(ha, switch)
+            sub_id = None
+            for key in ("trigger", "platform"):  # newer / older trigger syntax
+                try:
+                    sub_id = ha.next_id
+                    ha.call("subscribe_trigger", trigger={key: "state", "entity_id": switch})
+                    break
+                except HAError:
+                    sub_id = None
+            if sub_id is None:
+                raise RuntimeError("subscribe_trigger failed")
+            log("watching %s for power cycles" % switch)
+            ha.ws.sock.settimeout(60)
+            off_at, off_ctx = None, None
+            s = get_state(ha, switch)
+            if s and s.get("state") == "off":
+                off_at, off_ctx = parse_time(s.get("last_changed")), s.get("context")
+            while True:
+                try:
+                    msg = ha.ws.recv()
+                except _socket.timeout:
+                    if load_power().get("switch") != switch:
+                        log("watcher: power switch changed")
+                        break
+                    ha.ws.send({"id": ha.next_id, "type": "ping"})
+                    ha.next_id += 1
+                    continue
+                if msg.get("id") != sub_id or msg.get("type") != "event":
+                    continue
+                trig = ((msg.get("event") or {}).get("variables") or {}).get("trigger") or {}
+                old, new = trig.get("from_state") or {}, trig.get("to_state") or {}
+                if new.get("state") == "off" and old.get("state") != "off":
+                    off_at, off_ctx = parse_time(new.get("last_changed")) or time.time(), new.get("context")
+                elif new.get("state") == "on" and old.get("state") == "off":
+                    power = load_power()
+                    record_cycle({"switch": switch, "off": off_at, "on": parse_time(new.get("last_changed")) or time.time(),
+                                  "source": describe_source(ha, off_ctx, power, off_at)})
+                    off_at, off_ctx = None, None
+        except Exception as e:
+            log("watcher: %s - reconnecting in 30 s" % e)
+            time.sleep(30)
+        finally:
+            try:
+                ha.ws.close()
+            except Exception:
+                pass
+
+
 def find_entities(registry, uid_prefix, serial=None):
     pattern = re.compile(
         r"^" + re.escape(uid_prefix) +
@@ -606,7 +972,38 @@ def apex_latency(title, keys, hours):
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
-def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
+def power_section(power):
+    """Restart button (with confirmation), switch state (read-only) and power draw."""
+    cards = []
+    if power.get("button"):
+        cards.append({
+            "type": "button", "name": "Restart modem", "icon": "mdi:restart-alert", "show_state": False,
+            "icon_height": "48px",
+            "tap_action": {"action": "perform-action", "perform_action": "button.press",
+                           "target": {"entity_id": power["button"]},
+                           "confirmation": {"text": "Power-cycle the modem now? The internet will be "
+                                                    "down for a few minutes."}},
+            "hold_action": {"action": "none"}})
+    rows = []
+    if power.get("switch"):
+        rows.append({"entity": power["switch"], "name": "Modem power", "type": "simple-entity"})
+    if power.get("sensor"):
+        rows.append({"entity": power["sensor"], "name": "Power draw"})
+    if power.get("cycle"):
+        rows.append({"entity": power["cycle"], "name": "Last power cycle", "format": "relative"})
+        rows.append({"type": "attribute", "entity": power["cycle"], "attribute": "source",
+                     "name": "Triggered by", "icon": "mdi:account-cog"})
+    if power.get("last_boot"):
+        rows.append({"entity": power["last_boot"], "name": "Last modem boot (any reason)", "format": "relative"})
+    if rows:
+        cards.append({"type": "entities", "show_header_toggle": False, "entities": rows})
+    if power.get("sensor"):
+        cards.append({"type": "sensor", "entity": power["sensor"], "name": "Modem power draw",
+                      "graph": "line", "hours_to_show": 24, "detail": 2})
+    return cards
+
+
+def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=None):
     inc, hours = settings["include"], settings["hours"]
     sections = []
 
@@ -643,6 +1040,9 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
                     row["format"] = "relative"
                 entities.append(row)
         section("Status", [{"type": "entities", "show_header_toggle": False, "entities": entities}] if entities else [])
+
+    if inc["power"] and power:
+        section("Modem power", power_section(power))
 
     if inc["gauges"]:
         ds_segments = [{"from": -20, "color": "var(--error-color)"},
@@ -827,7 +1227,16 @@ def cmd_create(payload):
         log("Modem %s: %d entities, %d latency target(s); plotly-graph %s, apexcharts-card %s" % (
             serial, len(mapping), len(latency), "yes" if have_plotly else "no", "yes" if have_apex else "no"))
 
-        view = build_dashboard(ent, settings, have_plotly, have_apex, latency)
+        power = load_power()
+        modem_id = settings["uid_prefix"] + serial
+        by_uid = {e.get("unique_id"): e["entity_id"] for e in registry if not e.get("disabled_by")}
+        if power.get("switch"):
+            power["button"] = by_uid.get("%s_restart_modem" % modem_id)
+            power["cycle"] = by_uid.get("%s_last_power_cycle" % modem_id)
+        power = {k: v for k, v in power.items() if k in ("switch", "sensor", "button", "cycle") and v}
+        if power:
+            power["last_boot"] = ent.get("status", "last_boot")
+        view = build_dashboard(ent, settings, have_plotly, have_apex, latency, power)
         targets = dashboard_targets(ha, settings)
         url_path = write_view(ha, settings, view, targets)
 
@@ -872,6 +1281,8 @@ def cmd_refresh():
         targets = dashboard_targets(ha, settings)
         state = publish_target_select(ha, settings, settings["uid_prefix"] + serial, targets)
         log("Dashboard Target: %d choice(s), current: %s" % (len(targets), state))
+        power = publish_power(ha, settings["uid_prefix"] + serial)
+        log("Modem power switch: %s, sensor: %s" % (power.get("switch") or "none", power.get("sensor") or "none"))
     finally:
         ha.ws.close()
 
@@ -892,6 +1303,12 @@ def main(argv):
         cmd_refresh()
     elif command == "select":
         cmd_select(arg)
+    elif command in ("power-switch", "power-sensor"):
+        cmd_power_select(command.split("-")[1], arg)
+    elif command == "restart":
+        cmd_restart()
+    elif command == "watch":
+        cmd_watch()
     elif command == "create":
         cmd_create(arg)
     else:  # backwards compatible: tc4400_dashboard.py PAYLOAD

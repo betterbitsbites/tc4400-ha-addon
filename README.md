@@ -123,7 +123,10 @@ how to call it as an action: [app documentation](technicolor_modem_scrape/DOCS.m
 Besides one sensor set per channel, the scraper publishes **Summary** sensors across
 all channels (locked channel counts, worst/average SNR, power ranges, error totals and
 errors per minute), TCP latency, last boot time, and the full channel lists as
-attributes. An **internet latency probe** (default target `1.1.1.1`) adds average,
+attributes. With a smart plug, the app can also **restart the modem** (button with
+confirmation, checked switch-on with retries) and records every power cycle of
+that plug — including ones by automations or by hand — as *Last Power Cycle*.
+An **internet latency probe** (default target `1.1.1.1`) adds average,
 P95, min/max, jitter, loss, base latency and a congestion status per target. A static example dashboard with built-in cards only is in
 [`examples/dashboard.yaml`](examples/dashboard.yaml).
 

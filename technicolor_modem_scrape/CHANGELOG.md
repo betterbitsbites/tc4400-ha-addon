@@ -2,6 +2,23 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.7.0 — 2026-11-11
+
+### Added
+- **Restart the modem via a smart plug**: choose the switch under *Modem Power
+  Switch* on the TC4400 device; the new **Restart Modem** button switches it
+  off, waits `restart_off_seconds` (new option, default 15) and on again,
+  checks the result, retries switching on and raises an alarm if the modem
+  stays off. 3-minute cooldown. Warning for switches of cloud integrations.
+- **Last Power Cycle** sensor: every off → on of the chosen switch, whoever
+  triggered it (button, automation/script, user, the plug itself), with the
+  source and the off time as attributes. The app follows the switch live and
+  fills in the last power cycle from the history after an app restart.
+- **Modem Power Sensor** select for the modem's power draw.
+- Dashboard section **Modem power**: restart button with confirmation, switch
+  state (read-only), power draw with 24 h graph, last power cycle and source,
+  last modem boot.
+
 ## 1.6.1 — 2026-11-11
 
 ### Fixed

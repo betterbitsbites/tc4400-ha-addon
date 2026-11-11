@@ -37,6 +37,9 @@ bashio::log.info "Modem: ${MODEM_URL} | MQTT: ${MQTT_HOST}:${MQTT_PORT} | every 
 # and for the "Dashboard Target" select
 export DASHBOARD_COMMAND_TOPIC="tc4400_scraper/dashboard/create"
 DASHBOARD_TARGET_TOPIC="tc4400_scraper/dashboard/target/set"
+POWER_SWITCH_TOPIC="tc4400_scraper/power/switch/set"
+POWER_SENSOR_TOPIC="tc4400_scraper/power/sensor/set"
+RESTART_TOPIC="tc4400_scraper/modem/restart"
 dashboard() {
     python3 /usr/bin/tc4400_dashboard.py "$@" 2>&1 |
         while IFS= read -r line; do bashio::log.info "[dashboard] ${line}"; done
@@ -49,13 +52,21 @@ dashboard_listener() {
         # -R: ignore retained messages, so a dashboard is only built on request
         # -v: prefix every message with its topic
         mosquitto_sub -R -v -h "${MQTT_HOST}" -p "${MQTT_PORT}" "${auth[@]}" \
-            -t "${DASHBOARD_COMMAND_TOPIC}" -t "${DASHBOARD_TARGET_TOPIC}" |
+            -t "${DASHBOARD_COMMAND_TOPIC}" -t "${DASHBOARD_TARGET_TOPIC}" \
+            -t "${POWER_SWITCH_TOPIC}" -t "${POWER_SENSOR_TOPIC}" -t "${RESTART_TOPIC}" |
         while IFS= read -r line; do
             topic="${line%% *}"
             payload=""
             [ "${line}" != "${topic}" ] && payload="${line#* }"
             if [ "${topic}" == "${DASHBOARD_TARGET_TOPIC}" ]; then
                 dashboard select "${payload}"
+            elif [ "${topic}" == "${POWER_SWITCH_TOPIC}" ]; then
+                dashboard power-switch "${payload}"
+            elif [ "${topic}" == "${POWER_SENSOR_TOPIC}" ]; then
+                dashboard power-sensor "${payload}"
+            elif [ "${topic}" == "${RESTART_TOPIC}" ]; then
+                bashio::log.info "Modem restart requested"
+                dashboard restart &   # takes a while; the cooldown prevents double restarts
             else
                 bashio::log.info "Dashboard requested"
                 dashboard create "${payload}"
@@ -66,6 +77,16 @@ dashboard_listener() {
     done
 }
 dashboard_listener &
+
+# Follow the modem power switch: records every power cycle (button, automation,
+# user, physical button) as "Last Power Cycle"
+(
+    sleep 60
+    while true; do
+        dashboard watch
+        sleep 30
+    done
+) &
 
 # Keep the list of dashboards in the "Dashboard Target" select up to date
 (
