@@ -2,6 +2,21 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.8.0 — 2026-11-11
+
+### Changed
+- **Tidier dashboard layout.** The view is now built in rows whose sections
+  fill the width exactly, so related charts sit next to each other instead of
+  drifting between columns:
+  1. *Connection* (tiles) · *Signal* (gauges) · *Modem* (restart, power, boot, firmware)
+  2. *Downstream* (spectrum and history side by side) · *Upstream*
+  3. *Internet latency* · *Stability* (locked channels, modem response time)
+  4. *Errors*: SC-QAM and OFDM, uncorrectable and corrected, as a 2 × 2 grid
+  5. *Channels*: the full-width channel tables
+- The long status list is replaced by six tiles; device facts moved into the
+  *Modem* card. All charts have the same height; shorter titles.
+- Press *Create Dashboard* again to get the new layout.
+
 ## 1.7.3 — 2026-11-11
 
 ### Added

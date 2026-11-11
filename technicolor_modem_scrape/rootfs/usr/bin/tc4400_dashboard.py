@@ -784,6 +784,20 @@ def full(card):
     return card
 
 
+def width(card, columns):
+    """Card width in grid columns (12 per section column; HA clamps it on phones)."""
+    card["grid_options"] = {"columns": columns}
+    return card
+
+
+CHART_HEIGHT = 230
+
+
+def apex_height(card, height=CHART_HEIGHT):
+    card.setdefault("apex_config", {}).setdefault("chart", {})["height"] = height
+    return card
+
+
 def bands_ds_power():
     return [(-30, -DS_POWER_WARN, RED), (-DS_POWER_WARN, -DS_POWER_OK, YELLOW),
             (-DS_POWER_OK, DS_POWER_OK, GREEN), (DS_POWER_OK, DS_POWER_WARN, YELLOW),
@@ -815,14 +829,14 @@ def apex_line(title, series, hours, bands=None, ymin=None, ymax=None, decimals=1
         card["apex_config"] = {"annotations": {"yaxis": [
             {"y": lo, "y2": hi, "fillColor": color, "opacity": 0.08, "borderColor": "transparent"}
             for lo, hi, color in bands]}}
-    return full(card)
+    return full(apex_height(card))
 
 
 def apex_columns(title, rate_entity, name, hours, color):
     """Errors per hour as columns, from a per-minute rate sensor (average per hour
     x 60). The rate is already reset-safe (modem reboot, counter reset), unlike
     differences of the totals, which turn negative when the modem restarts."""
-    return full({
+    return full(apex_height({
         "type": "custom:apexcharts-card",
         "graph_span": "%dh" % hours,
         "header": {"show": True, "title": title},
@@ -830,7 +844,7 @@ def apex_columns(title, rate_entity, name, hours, color):
         "series": [{"entity": rate_entity, "name": name, "type": "column", "color": color,
                     "group_by": {"func": "avg", "duration": "1h"},
                     "transform": "return x === null ? null : Math.round(Number(x) * 60);"}],
-    })
+    }))
 
 
 def history(title, series, hours):
@@ -883,7 +897,7 @@ def plotly_spectrum(title, entity, value, unit, color_js, yrange=None, lines=())
             "hovertemplate": ("Channel %%{customdata[0]} · %%{customdata[1]} · %%{customdata[2]}<br>"
                               "%%{x:.1f} MHz (%%{customdata[3]:.1f} MHz wide)<br>%%{y:.1f} %s<extra></extra>") % unit,
         }],
-        "layout": {"height": 240, "showlegend": False, "bargap": 0,
+        "layout": {"height": CHART_HEIGHT, "showlegend": False, "bargap": 0,
                    "margin": {"t": 10, "b": 45, "l": 55, "r": 10},
                    "xaxis": {"type": "linear", "title": {"text": "MHz"}},
                    "yaxis": yaxis, "shapes": shapes},
@@ -1012,51 +1026,53 @@ def apex_latency(title, keys, hours):
     for k, name in (("max", "Max"), ("jitter", "Jitter"), ("loss", "Loss")):
         if keys.get(k):
             series.append({"entity": keys[k], "name": name, "show": {"in_chart": False}})
-    return full({
+    return full(apex_height({
         "type": "custom:apexcharts-card",
         "graph_span": "%dh" % hours,
         "update_interval": "1min",
         "header": {"show": True, "title": title, "show_states": True, "colorize_states": True},
         "yaxis": [{"min": 0, "max": "~60", "decimals": 0}],
         "series": series,
-    })
+    }))
 
 
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
-def power_section(power):
-    """Restart button (with confirmation), switch state (read-only) and power draw."""
-    cards = []
-    if power.get("button"):
-        cards.append({
-            "type": "button", "name": "Restart modem", "icon": "mdi:restart-alert", "show_state": False,
-            "icon_height": "48px",
-            "tap_action": {"action": "perform-action", "perform_action": "button.press",
-                           "target": {"entity_id": power["button"]},
-                           "confirmation": {"text": "Power-cycle the modem now? The internet will be "
-                                                    "down for a few minutes."}},
-            "hold_action": {"action": "none"}})
+def modem_rows(power, E, with_power=True, with_status=True):
+    """Compact list for the Modem section: restart, power and device facts."""
     rows = []
-    if power.get("switch"):
-        rows.append({"entity": power["switch"], "name": "Modem power", "type": "simple-entity"})
-    if power.get("sensor"):
-        rows.append({"entity": power["sensor"], "name": "Power draw"})
-    if power.get("cycle"):
-        rows.append({"entity": power["cycle"], "name": "Last power cycle", "format": "relative"})
-        rows.append({"type": "attribute", "entity": power["cycle"], "attribute": "source",
-                     "name": "Triggered by", "icon": "mdi:account-cog"})
-    if power.get("last_boot"):
-        rows.append({"entity": power["last_boot"], "name": "Last modem boot (any reason)", "format": "relative"})
-    if rows:
-        cards.append({"type": "entities", "show_header_toggle": False, "entities": rows})
-    if power.get("sensor"):
-        cards.append({"type": "sensor", "entity": power["sensor"], "name": "Modem power draw",
-                      "graph": "line", "hours_to_show": 24, "detail": 2})
-    return cards
+    if with_power and power:
+        if power.get("button"):
+            rows.append({
+                "type": "button", "name": "Restart modem", "icon": "mdi:restart-alert", "action_name": "Restart",
+                "tap_action": {"action": "perform-action", "perform_action": "button.press",
+                               "target": {"entity_id": power["button"]},
+                               "confirmation": {"text": "Power-cycle the modem now? The internet will be "
+                                                        "down for a few minutes."}}})
+        if power.get("switch"):
+            rows.append({"entity": power["switch"], "name": "Modem power", "type": "simple-entity"})
+        if power.get("sensor"):
+            rows.append({"entity": power["sensor"], "name": "Power draw"})
+        if power.get("cycle"):
+            rows.append({"entity": power["cycle"], "name": "Last power cycle", "format": "relative"})
+            rows.append({"type": "attribute", "entity": power["cycle"], "attribute": "source",
+                         "name": "Triggered by", "icon": "mdi:account-cog"})
+    if with_status:
+        for entity, name, extra in ((E("status", "last_boot"), "Last modem boot", {"format": "relative"}),
+                                    (E("status", "boot"), "Boot state", {}),
+                                    (E("status", "docsis"), "DOCSIS", {}),
+                                    (E("status", "sw_version"), "Software", {})):
+            if entity:
+                rows.append(dict({"entity": entity, "name": name}, **extra))
+    return rows
 
 
 def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=None):
+    """Rows of sections whose widths add up to the 3 columns, so related things stay
+    together and nothing drifts: overview (connection | signal | modem),
+    downstream | upstream, internet latency | stability, errors, channel table.
+    On narrower screens the sections stack in the same order."""
     inc, hours = settings["include"], settings["hours"]
     sections = []
 
@@ -1067,35 +1083,32 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
             if span > 1:
                 sec["column_span"] = span
             sections.append(sec)
+            return True
+        return False
+
+    def half(card, span):          # two cards side by side in a section of `span` columns
+        return width(card, 6 * span)
+
+    def line(title, series, h, bands=None, ymin=None, ymax=None, decimals=1):
+        if have_apex:
+            return apex_line(title, series, h, bands, ymin, ymax, decimals)
+        return history(title, series, h)
 
     E = ent.get
     ds_list, us_list = E("channels_down", "count"), E("channels_up", "count")
     hist = E("channel_history", "scrapes")
+    lat_status = [k["status"] for k in (latency or {}).values() if k.get("status")]
 
+    # ---- row 1: overview -------------------------------------------------
     if inc["status"]:
-        rows = [
-            (E("status", "connectivity"), "Connectivity"), (E("status", "boot"), "Boot state"),
-            (E("status", "docsis"), "DOCSIS"), (E("status", "sw_version"), "Software"),
-            (E("status", "uptime"), "Uptime"), (E("status", "last_boot"), "Last boot"),
-            (E("status", "latency"), "TCP latency"),
-            (E("summary", "down_locked"), "Downstream locked"), (E("summary", "down_channels"), "Downstream channels"),
-            (E("summary", "up_locked"), "Upstream locked"), (E("summary", "up_channels"), "Upstream channels"),
-            (E("summary", "corr"), "Corrected total (SC-QAM)"), (E("summary", "uncorr"), "Uncorrectable total (SC-QAM)"),
-            (E("summary", "corr_rate"), "Corrected / min (SC-QAM)"), (E("summary", "uncorr_rate"), "Uncorrectable / min (SC-QAM)"),
-            (E("summary", "ofdm_snr_min"), "OFDM SNR (worst)"),
-            (E("summary", "ofdm_uncorr_rate"), "OFDM uncorrectable / min"),
-        ]
-        entities = []
-        for entity, name in rows:
-            if entity:
-                row = {"entity": entity, "name": name}
-                if name == "Last boot":
-                    row["format"] = "relative"
-                entities.append(row)
-        section("Status", [{"type": "entities", "show_header_toggle": False, "entities": entities}] if entities else [])
-
-    if inc["power"] and power:
-        section("Modem power", power_section(power))
+        tiles = [(E("status", "connectivity"), "Connectivity", "mdi:lan-connect"),
+                 (E("status", "uptime"), "Uptime", "mdi:timer-outline"),
+                 (E("summary", "down_locked"), "Downstream locked", "mdi:download-network"),
+                 (E("summary", "up_locked"), "Upstream locked", "mdi:upload-network"),
+                 (E("summary", "uncorr_rate"), "Uncorrectable / min", "mdi:alert-circle-outline"),
+                 (lat_status[0] if lat_status and inc["internet"] else E("status", "latency"),
+                  "Internet" if lat_status and inc["internet"] else "Modem latency", "mdi:earth")]
+        section("Connection", [{"type": "tile", "entity": e, "name": n, "icon": i} for e, n, i in tiles if e])
 
     if inc["gauges"]:
         ds_segments = [{"from": -20, "color": "var(--error-color)"},
@@ -1105,104 +1118,109 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
                        {"from": DS_POWER_WARN, "color": "var(--error-color)"}]
         cards = []
         if E("summary", "snr_min"):
-            cards.append(gauge(E("summary", "snr_min"), "SNR worst (SC-QAM)", 25, 45,
+            cards.append(gauge(E("summary", "snr_min"), "SNR worst", 25, 45,
                                severity={"red": 0, "yellow": SNR_WARN, "green": SNR_OK}))
         if E("summary", "up_power_max"):
-            cards.append(gauge(E("summary", "up_power_max"), "US power (highest)", 30, 55,
+            cards.append(gauge(E("summary", "up_power_max"), "Upstream max", 30, 55,
                                severity={"green": 0, "yellow": US_POWER_OK, "red": US_POWER_WARN}))
         if E("summary", "down_power_min"):
-            cards.append(gauge(E("summary", "down_power_min"), "DS power min", -20, 20, segments=ds_segments))
+            cards.append(gauge(E("summary", "down_power_min"), "Downstream min", -20, 20, segments=ds_segments))
         if E("summary", "down_power_max"):
-            cards.append(gauge(E("summary", "down_power_max"), "DS power max", -20, 20, segments=ds_segments))
-        section("Signal now", cards)
+            cards.append(gauge(E("summary", "down_power_max"), "Downstream max", -20, 20, segments=ds_segments))
+        section("Signal", cards)
 
+    rows = modem_rows(power, E, with_power=inc["power"], with_status=inc["status"])
+    section("Modem", [{"type": "entities", "show_header_toggle": False, "entities": rows}] if rows else [])
+
+    # ---- row 2: downstream | upstream -----------------------------------
+    spectrum = inc["spectrum"] and have_plotly
+    ds_power_color = ("Math.abs(c.power) > %d ? '%s' : (Math.abs(c.power) > %d ? '%s' : '%s')"
+                      % (DS_POWER_WARN, RED, DS_POWER_OK, YELLOW, GREEN))
+    snr_color = ("/OFDM/.test(c.type || '') ? '%s' : (c.snr < %d ? '%s' : (c.snr < %d ? '%s' : '%s'))"
+                 % (OFDM_BLUE, SNR_WARN, RED, SNR_OK, YELLOW, GREEN))
+    us_color = "c.power > %d ? '%s' : (c.power > %d ? '%s' : '%s')" % (US_POWER_WARN, RED, US_POWER_OK, YELLOW, GREEN)
+
+    cards = []
+    if spectrum and ds_list:
+        cards += [half(plotly_spectrum("Power per channel", ds_list, "power", "dBmV", ds_power_color,
+                                       (-DS_POWER_WARN - 3, DS_POWER_WARN + 3),
+                                       [(DS_POWER_OK, YELLOW), (-DS_POWER_OK, YELLOW),
+                                        (DS_POWER_WARN, RED), (-DS_POWER_WARN, RED)]), 2),
+                  half(plotly_spectrum("SNR per channel", ds_list, "snr", "dB", snr_color,
+                                       (20, 45), [(SNR_OK, YELLOW), (SNR_WARN, RED)]), 2)]
+    if inc["downstream"]:
+        snr = [(e, n) for e, n in ((E("summary", "snr_min"), "Worst SC-QAM"), (E("summary", "snr_avg"), "Average SC-QAM"),
+                                   (E("summary", "ofdm_snr_min"), "Worst OFDM")) if e]
+        pwr = [(e, n) for e, n in ((E("summary", "down_power_min"), "Min"), (E("summary", "down_power_max"), "Max")) if e]
+        if snr:
+            cards.append(half(line("SNR", snr, hours, bands_snr(), 25, 45), 2))
+        if pwr:
+            cards.append(half(line("Power range", pwr, hours, bands_ds_power(), -20, 20), 2))
+    section("Downstream", cards, span=2)
+
+    cards = []
+    if spectrum and us_list:
+        cards.append(plotly_spectrum("Power per channel", us_list, "power", "dBmV", us_color,
+                                     (30, 56), [(US_POWER_OK, YELLOW), (US_POWER_WARN, RED)]))
+    if inc["upstream"]:
+        series = [(e, "Up %d" % n) for n, e in ent.channels("upstream", "power")]
+        if series:
+            cards.append(line("Power history", series, hours, bands_us_power(), 30, 55))
+    section("Upstream", cards)
+
+    # ---- row 3: internet latency | stability -----------------------------
+    lat_cards = []
     if inc["internet"] and latency:
-        cards = []
         lh = settings["latency_hours"]
         for slug, keys in latency.items():
             name = slug.replace("_", ".")
-            cards.append(latency_summary("Internet latency %s" % name, keys))
+            lat_cards.append(latency_summary(name, keys))
             if have_apex:
-                cards.append(apex_latency("Latency %s" % name, keys, lh))
+                lat_cards.append(apex_latency("Latency %s" % name, keys, lh))
             else:
                 s = [(keys[k], n) for k, n in (("avg", "Average"), ("max", "Max"), ("base", "Base latency"),
                                               ("threshold", "Congestion threshold")) if keys.get(k)]
-                cards.append(history("Latency %s" % name, s, lh))
-        section("Internet latency", cards)
+                lat_cards.append(history("Latency %s" % name, s, lh))
+    has_latency = section("Internet latency", lat_cards, span=2)
 
-    if inc["spectrum"] and have_plotly and ds_list:
-        ds_power_color = ("Math.abs(c.power) > %d ? '%s' : (Math.abs(c.power) > %d ? '%s' : '%s')"
-                          % (DS_POWER_WARN, RED, DS_POWER_OK, YELLOW, GREEN))
-        snr_color = ("/OFDM/.test(c.type || '') ? '%s' : (c.snr < %d ? '%s' : (c.snr < %d ? '%s' : '%s'))"
-                     % (OFDM_BLUE, SNR_WARN, RED, SNR_OK, YELLOW, GREEN))
-        us_color = "c.power > %d ? '%s' : (c.power > %d ? '%s' : '%s')" % (US_POWER_WARN, RED, US_POWER_OK, YELLOW, GREEN)
-        cards = [plotly_spectrum("Downstream power per channel", ds_list, "power", "dBmV", ds_power_color,
-                                 (-DS_POWER_WARN - 3, DS_POWER_WARN + 3),
-                                 [(DS_POWER_OK, YELLOW), (-DS_POWER_OK, YELLOW),
-                                  (DS_POWER_WARN, RED), (-DS_POWER_WARN, RED)]),
-                 plotly_spectrum("Downstream SNR per channel", ds_list, "snr", "dB", snr_color,
-                                 (20, 45), [(SNR_OK, YELLOW), (SNR_WARN, RED)])]
-        if us_list:
-            cards.append(plotly_spectrum("Upstream power per channel", us_list, "power", "dBmV", us_color,
-                                         (30, 56), [(US_POWER_OK, YELLOW), (US_POWER_WARN, RED)]))
-        section("Channels (spectrum)", cards)
+    cards = []
+    locked = [(e, n) for e, n in ((E("summary", "down_locked"), "Downstream"), (E("summary", "up_locked"), "Upstream")) if e]
+    if inc["upstream"] and locked:
+        cards.append(line("Locked channels (7 days)", locked, max(hours, 168), ymin=0, decimals=0))
+    if inc["latency"] and E("status", "latency"):
+        cards.append(line("Response time of the modem", [(E("status", "latency"), "TCP")], hours, ymin=0, decimals=0))
+    if has_latency:
+        section("Stability", cards)
+    else:
+        section("Stability", [half(c, 3) for c in cards], span=3)
 
+    # ---- row 4: errors ---------------------------------------------------
+    if inc["errors"]:
+        cards = []
+        # ApexCharts: from the reset-safe rate sensors. Built-in fallback: long-term
+        # statistics of the totals (total_increasing, HA treats a drop as a reset).
+        for key, rate, title, name, color, fallback in (
+                ("uncorr", "uncorr_rate", "Uncorrectable per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
+                ("corr", "corr_rate", "Corrected per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
+                ("ofdm_uncorr", "ofdm_uncorr_rate", "Uncorrectable codewords per hour (OFDM)", "OFDM uncorrectable",
+                 OFDM_BLUE, ("hour", 3)),
+                # corrected codewords are normal on OFDM (LDPC); useful to compare before/after
+                ("ofdm_corr", "ofdm_corr_rate", "Corrected codewords per hour (OFDM)", "OFDM corrected",
+                 "#90caf9", ("day", 30))):
+            if have_apex and E("summary", rate):
+                cards.append(half(apex_columns(title, E("summary", rate), name, max(hours, 72), color), 3))
+            elif E("summary", key):
+                cards.append(half(stat_bars(title, E("summary", key), name, *fallback), 3))
+        section("Errors", cards, span=3)
+
+    # ---- row 5: channel table ---------------------------------------------
     if inc["channel_table"] and (ds_list or us_list):
         cards = []
         if ds_list:
             cards.append(channel_table("Downstream channels", ds_list, history=hist))
         if us_list:
             cards.append(channel_table("Upstream channels", us_list, upstream=True, history=hist))
-        # twice as wide, so the table with its trend columns fits without scrolling
-        section("Channel table", cards, span=2 if hist else 1)
-
-    if inc["upstream"]:
-        series = [(e, "Up %d" % n) for n, e in ent.channels("upstream", "power")]
-        cards = []
-        if series:
-            cards.append(apex_line("Upstream power per channel", series, hours, bands_us_power(), 30, 55)
-                         if have_apex else history("Upstream power per channel", series, hours))
-        if E("summary", "up_locked"):
-            s = [(E("summary", "up_locked"), "Locked")]
-            cards.append(apex_line("Locked upstream channels", s, max(hours, 168), decimals=0, ymin=0)
-                         if have_apex else history("Locked upstream channels", s, max(hours, 168)))
-        section("Upstream (upload)", cards)
-
-    if inc["downstream"]:
-        cards = []
-        snr = [(e, n) for e, n in ((E("summary", "snr_min"), "Worst SC-QAM"), (E("summary", "snr_avg"), "Average SC-QAM"),
-                                   (E("summary", "ofdm_snr_min"), "Worst OFDM")) if e]
-        pwr = [(e, n) for e, n in ((E("summary", "down_power_min"), "Min"), (E("summary", "down_power_max"), "Max")) if e]
-        if snr:
-            cards.append(apex_line("Downstream SNR", snr, hours, bands_snr(), 25, 45)
-                         if have_apex else history("Downstream SNR", snr, hours))
-        if pwr:
-            cards.append(apex_line("Downstream power range", pwr, hours, bands_ds_power(), -20, 20)
-                         if have_apex else history("Downstream power range", pwr, hours))
-        section("Downstream (download)", cards)
-
-    if inc["errors"]:
-        cards = []
-        # ApexCharts: from the reset-safe rate sensors. Built-in fallback: long-term
-        # statistics of the totals (total_increasing, HA treats a drop as a reset).
-        for key, rate, title, name, color, fallback in (
-                ("uncorr", "uncorr_rate", "Uncorrectable errors per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
-                ("corr", "corr_rate", "Corrected errors per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
-                ("ofdm_uncorr", "ofdm_uncorr_rate", "OFDM uncorrectable codewords per hour", "OFDM uncorrectable",
-                 OFDM_BLUE, ("hour", 3)),
-                # corrected codewords are normal on OFDM (LDPC); useful to compare before/after
-                ("ofdm_corr", "ofdm_corr_rate", "OFDM corrected codewords per hour", "OFDM corrected",
-                 "#90caf9", ("day", 30))):
-            if have_apex and E("summary", rate):
-                cards.append(apex_columns(title, E("summary", rate), name, max(hours, 72), color))
-            elif E("summary", key):
-                cards.append(stat_bars(title, E("summary", key), name, *fallback))
-        section("Errors", cards)
-
-    if inc["latency"] and E("status", "latency"):
-        s = [(E("status", "latency"), "TCP")]
-        section("Modem latency", [apex_line("TCP latency to the modem", s, hours, ymin=0)
-                                  if have_apex else history("TCP latency to the modem", s, hours)])
+        section("Channels", cards, span=3)
 
     return {"title": "TC4400", "path": VIEW_PATH, "icon": "mdi:router-network",
             "type": "sections", "max_columns": 3, "sections": sections}

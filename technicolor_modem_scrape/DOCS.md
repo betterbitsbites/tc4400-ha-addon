@@ -150,17 +150,20 @@ Take control*. YAML dashboards can't be changed by the app.
 
 **Contents**
 
-| Section | Built-in cards | With extra cards |
-|---|---|---|
-| Status | Connectivity, DOCSIS, uptime, last boot, latency, locked channels, errors | same |
-| Modem power | Restart button with confirmation, switch state (read-only), power draw with 24 h graph, last power cycle and who triggered it, last modem boot | same |
-| Signal now | Gauges: worst SNR, highest upstream power, downstream power range | same |
-| Internet latency | Status line per target (average, P95, min/max, jitter, loss) and history graph | Chart with min–max shading, average, base latency and congestion threshold (*apexcharts-card*) |
-| Channels (spectrum) | – | Fritz!Box-style bars per channel along the frequency band: downstream power, downstream SNR, upstream power — coloured green/yellow/red (*plotly-graph*) |
-| Channel table | Table of all channels with 🟢🟡🔴 markers and sparklines of the last 30 scrapes (SNR, uncorrectable errors, upstream power) | same |
-| Upstream / Downstream | History graphs | Charts with coloured good/warning/bad ranges (*apexcharts-card*) |
-| Errors | Corrected/uncorrectable per hour/day | Columns per hour (*apexcharts-card*) |
-| Modem latency | History graph | Chart (*apexcharts-card*) |
+The view is laid out in rows; related things stay together, and on a phone the
+sections stack in the same order.
+
+| Row | Section | Built-in cards | With extra cards |
+|---|---|---|---|
+| 1 | Connection | Tiles: connectivity, uptime, locked channels, uncorrectable errors per minute, internet status | same |
+| 1 | Signal | Gauges: worst SNR, highest upstream power, downstream power min/max | same |
+| 1 | Modem | Restart button with confirmation, switch state (read-only), power draw, last power cycle and who triggered it, last boot, DOCSIS, software | same |
+| 2 | Downstream | SNR and power range history | plus Fritz!Box-style spectrum per channel (*plotly-graph*); charts with coloured good/warning/bad ranges (*apexcharts-card*) |
+| 2 | Upstream | Power history | plus spectrum; coloured ranges |
+| 3 | Internet latency | Status line per target (average, P95, min/max, jitter, loss) and history graph | Chart with P95 shading, average, base latency and congestion threshold |
+| 3 | Stability | Locked channels (7 days), response time of the modem | same, as charts |
+| 4 | Errors | Corrected/uncorrectable per hour/day, SC-QAM and OFDM | Columns per hour |
+| 5 | Channels | Table of all channels with 🟢🟡🔴 markers and sparklines of the last 30 scrapes | same |
 
 **Optional extra cards** — install from the Marketplace / HACS (*Dashboard*
 category), then press *Create Dashboard* again:
