@@ -155,8 +155,8 @@ sections stack in the same order.
 
 | Row | Section | Built-in cards | With extra cards |
 |---|---|---|---|
-| 1 | Connection | Tiles: connectivity, uptime, locked channels, internet status, modem response; table SC-QAM vs OFDM (channels, SNR, errors per minute and since boot) | same |
-| 1 | Signal | Gauges: worst SNR, highest upstream power, downstream power min/max | same |
+| 1 | Status | Clickable rows (click = history graph) under **SC-QAM** and **OFDM**: SNR worst/average, uncorrectable and corrected errors per minute and since boot, OFDM channels | same |
+| 1 | Connection | Tiles: connectivity, uptime, locked channels, internet status, modem response; gauges: worst SNR, highest upstream power, downstream power min/max | same |
 | 1 | Modem | Restart button with confirmation, switch state (read-only), power draw, last power cycle and who triggered it, last boot, DOCSIS, software | same |
 | 2 | Downstream | SNR and power range history | plus Fritz!Box-style spectrum per channel (*plotly-graph*); charts with coloured good/warning/bad ranges (*apexcharts-card*) |
 | 2 | Upstream | Power history | plus spectrum; coloured ranges |

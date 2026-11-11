@@ -1039,43 +1039,21 @@ def apex_latency(title, keys, hours):
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
-def qam_vs_ofdm(E):
-    """SC-QAM and OFDM side by side: channels, SNR, error totals and rates.
-    They are never mixed: OFDM counts codewords (billions) and measures SNR differently."""
-    keys = {"sc_snr_min": E("summary", "snr_min"), "sc_snr_avg": E("summary", "snr_avg"),
-            "sc_corr": E("summary", "corr"), "sc_uncorr": E("summary", "uncorr"),
-            "sc_corr_rate": E("summary", "corr_rate"), "sc_uncorr_rate": E("summary", "uncorr_rate"),
-            "down": E("summary", "down_channels"), "of_n": E("summary", "ofdm_channels"),
-            "of_snr_min": E("summary", "ofdm_snr_min"),
-            "of_corr": E("summary", "ofdm_corr"), "of_uncorr": E("summary", "ofdm_uncorr"),
-            "of_corr_rate": E("summary", "ofdm_corr_rate"), "of_uncorr_rate": E("summary", "ofdm_uncorr_rate")}
-    if not (keys["sc_uncorr"] or keys["of_uncorr"]):
-        return None
-    sets = "".join("{%%- set %s = states('%s') -%%}\n" % (k, e) for k, e in keys.items() if e)
-    sets += "".join("{%%- set %s = 'unknown' -%%}\n" % k for k, e in keys.items() if not e)
-    content = (
-        sets +
-        # number with thin-space thousands separators, '–' when unknown
-        "{%- macro n(x, d=0) -%}{%- if x | is_number -%}"
-        "{{ ('{:,.' ~ d ~ 'f}').format(x | float) | replace(',', '\u2009') }}"
-        "{%- else -%}–{%- endif -%}{%- endmacro -%}\n"
-        # rate: red when uncorrectable errors are happening right now
-        "{%- macro r(x, bad) -%}{%- if bad and x | is_number and x | float > 0 -%}"
-        "<font color=\"" + RED + "\">{{ n(x, 1) }}</font>{%- else -%}{{ n(x, 1) }}{%- endif -%}{%- endmacro -%}\n"
-        "{%- set sc_n = (down | int(0)) - (of_n | int(0)) if down | is_number else 'unknown' -%}\n"
-        "| | SC-QAM | <font color=\"" + OFDM_BLUE + "\">OFDM</font> |\n"
-        "|:--|--:|--:|\n"
-        "| Channels | {{ n(sc_n) }} | {{ n(of_n) }} |\n"
-        "| SNR worst | {{ n(sc_snr_min, 1) }} dB | {{ n(of_snr_min, 1) }} dB |\n"
-        "| SNR average | {{ n(sc_snr_avg, 1) }} dB | |\n"
-        "| Uncorrectable / min | {{ r(sc_uncorr_rate, true) }} | {{ r(of_uncorr_rate, true) }} |\n"
-        "| Corrected / min | {{ r(sc_corr_rate, false) }} | {{ r(of_corr_rate, false) }} |\n"
-        "| Uncorrectable since boot | {{ n(sc_uncorr) }} | {{ n(of_uncorr) }} |\n"
-        "| Corrected since boot | {{ n(sc_corr) }} | {{ n(of_corr) }} |\n"
-        "\n<small>OFDM counts codewords and measures SNR differently, so the two are never "
-        "added up. Corrected OFDM codewords are normal.</small>"
-    )
-    return {"type": "markdown", "title": "SC-QAM vs OFDM", "content": content}
+def error_rows(E):
+    """Clickable entity rows (more-info shows the history graph), SC-QAM and OFDM
+    under their own headers: they are never added up, OFDM counts codewords."""
+    rows = []
+    for label, items in (
+            ("SC-QAM", (("snr_min", "SNR worst"), ("snr_avg", "SNR average"),
+                        ("uncorr_rate", "Uncorrectable / min"), ("corr_rate", "Corrected / min"),
+                        ("uncorr", "Uncorrectable since boot"), ("corr", "Corrected since boot"))),
+            ("OFDM", (("ofdm_channels", "Channels"), ("ofdm_snr_min", "SNR worst"),
+                      ("ofdm_uncorr_rate", "Uncorrectable / min"), ("ofdm_corr_rate", "Corrected / min"),
+                      ("ofdm_uncorr", "Uncorrectable since boot"), ("ofdm_corr", "Corrected since boot")))):
+        found = [{"entity": E("summary", k), "name": n} for k, n in items if E("summary", k)]
+        if found:
+            rows += [{"type": "section", "label": label}] + found
+    return rows
 
 
 def modem_rows(power, E, with_power=True, with_status=True):
@@ -1139,6 +1117,13 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
     lat_status = [k["status"] for k in (latency or {}).values() if k.get("status")]
 
     # ---- row 1: overview -------------------------------------------------
+    # left: errors and SNR per type, as clickable rows (like the old status list)
+    if inc["status"]:
+        rows = error_rows(E)
+        section("Status", [{"type": "entities", "show_header_toggle": False, "entities": rows}] if rows else [])
+
+    # middle: connection tiles and signal gauges
+    cards = []
     if inc["status"]:
         tiles = [(E("status", "connectivity"), "Connectivity", "mdi:lan-connect"),
                  (E("status", "uptime"), "Uptime", "mdi:timer-outline"),
@@ -1146,16 +1131,13 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
                  (E("summary", "up_locked"), "Upstream locked", "mdi:upload-network"),
                  (lat_status[0] if lat_status and inc["internet"] else None, "Internet", "mdi:earth"),
                  (E("status", "latency"), "Modem response", "mdi:timer-sand")]
-        section("Connection", [{"type": "tile", "entity": e, "name": n, "icon": i} for e, n, i in tiles if e]
-                + [qam_vs_ofdm(E)])
-
+        cards += [{"type": "tile", "entity": e, "name": n, "icon": i} for e, n, i in tiles if e]
     if inc["gauges"]:
         ds_segments = [{"from": -20, "color": "var(--error-color)"},
                        {"from": -DS_POWER_WARN, "color": "var(--warning-color)"},
                        {"from": -DS_POWER_OK, "color": "var(--success-color)"},
                        {"from": DS_POWER_OK, "color": "var(--warning-color)"},
                        {"from": DS_POWER_WARN, "color": "var(--error-color)"}]
-        cards = []
         if E("summary", "snr_min"):
             cards.append(gauge(E("summary", "snr_min"), "SNR worst (SC-QAM)", 25, 45,
                                severity={"red": 0, "yellow": SNR_WARN, "green": SNR_OK}))
@@ -1166,7 +1148,7 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
             cards.append(gauge(E("summary", "down_power_min"), "Downstream min", -20, 20, segments=ds_segments))
         if E("summary", "down_power_max"):
             cards.append(gauge(E("summary", "down_power_max"), "Downstream max", -20, 20, segments=ds_segments))
-        section("Signal", cards)
+    section("Connection", cards)
 
     rows = modem_rows(power, E, with_power=inc["power"], with_status=inc["status"])
     section("Modem", [{"type": "entities", "show_header_toggle": False, "entities": rows}] if rows else [])

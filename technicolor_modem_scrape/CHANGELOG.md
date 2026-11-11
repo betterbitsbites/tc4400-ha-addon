@@ -2,6 +2,15 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.8.2 — 2026-11-11
+
+### Changed
+- Dashboard: the **Status** list is back in the top left, with clickable rows
+  (click = history graph), grouped under **SC-QAM** and **OFDM**: SNR worst /
+  average, uncorrectable and corrected errors per minute and since boot, OFDM
+  channel count. It replaces the SC-QAM vs OFDM table from 1.8.1.
+- Connection tiles and signal gauges share the middle column; *Modem* stays right.
+
 ## 1.8.1 — 2026-11-11
 
 ### Changed
