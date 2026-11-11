@@ -24,6 +24,7 @@ Only the Python standard library is used.
 import json
 import math
 import os
+import random
 import select
 import socket
 import struct
@@ -36,6 +37,7 @@ from collections import deque
 OPTIONS_FILE = "/data/options.json"
 BASE_SPAN = 15 * 60          # seconds of history for the base latency
 DISCOVERY_REFRESH = 3600     # re-publish discovery configs every hour
+RESET_AFTER = 30             # seconds of total loss before the probe is recreated
 
 
 def log(msg):
@@ -85,18 +87,35 @@ def checksum(data):
 
 
 class IcmpProbe:
-    """ICMP echo over a raw socket (needs CAP_NET_RAW, which the app has as root)."""
+    """ICMP echo over a raw socket (needs CAP_NET_RAW, which the app has as root).
+
+    Every echo request gets a new random identifier, like ping tools do. With a
+    fixed identifier, routers and NAT (pf, Docker) keep one ICMP state alive
+    forever because a new request arrives every second; after a WAN/VPN
+    reconnect that stale state sends the replies the wrong way and the probe
+    never recovers. Replies are matched by a random token in the payload, so
+    NAT that rewrites the identifier doesn't matter either.
+    """
     name = "icmp"
 
-    def __init__(self, ip, ident):
-        self.ip, self.ident, self.seq = ip, ident & 0xFFFF, 0
+    def __init__(self, ip):
+        self.ip, self.seq = ip, 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+        self.unmatched = 0   # echo replies from the target that didn't match (late or rewritten)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
     def probe(self, timeout):
         self.seq = (self.seq + 1) & 0xFFFF
-        payload = struct.pack("!d", time.time()) + b"tc4400-latency"
-        header = struct.pack("!BBHHH", 8, 0, 0, self.ident, self.seq)
-        packet = struct.pack("!BBHHH", 8, 0, checksum(header + payload), self.ident, self.seq) + payload
+        ident = random.getrandbits(16)
+        token = os.urandom(8)
+        payload = token + b"tc4400-latency"
+        header = struct.pack("!BBHHH", 8, 0, 0, ident, self.seq)
+        packet = struct.pack("!BBHHH", 8, 0, checksum(header + payload), ident, self.seq) + payload
         start = time.perf_counter()
         self.sock.sendto(packet, (self.ip, 0))
         deadline = start + timeout
@@ -110,17 +129,23 @@ class IcmpProbe:
             data, addr = self.sock.recvfrom(2048)
             now = time.perf_counter()
             ihl = (data[0] & 0x0F) * 4
-            icmp_type, _, _, ident, seq = struct.unpack("!BBHHH", data[ihl:ihl + 8])
-            if icmp_type == 0 and ident == self.ident and seq == self.seq and addr[0] == self.ip:
+            if len(data) < ihl + 8 or addr[0] != self.ip or data[ihl] != 0:
+                continue  # not an echo reply from our target
+            if data[ihl + 8:ihl + 16] == token:
                 return (now - start) * 1000.0
+            self.unmatched += 1
 
 
 class TcpProbe:
     """TCP connect time; a refused connection (RST) is a valid round trip too."""
     name = "tcp"
+    unmatched = 0
 
     def __init__(self, ip, port):
         self.ip, self.port = ip, port
+
+    def close(self):
+        pass
 
     def probe(self, timeout):
         start = time.perf_counter()
@@ -134,12 +159,13 @@ class TcpProbe:
         return (time.perf_counter() - start) * 1000.0
 
 
-def make_probe(ip, method, index, port):
+def make_probe(ip, method, port):
     if method in ("auto", "icmp"):
         try:
-            p = IcmpProbe(ip, os.getpid() + index)
+            p = IcmpProbe(ip)
             if method == "icmp" or any(p.probe(2.0) is not None for _ in range(3)):
                 return p
+            p.close()
             log("%s: no ICMP reply, falling back to TCP port %d" % (ip, port))
         except PermissionError:
             if method == "icmp":
@@ -266,16 +292,19 @@ class Target(threading.Thread):
         self.name_, self.index, self.s, self.mqtt, self.prefix = name, index, settings, mqtt, prefix
         self.topic = "%s/internet_latency/%s" % (prefix, slug(name))
 
-    def run(self):
-        s = self.s
+    def setup(self):
+        """Resolve the target and pick the probe; retries until it works."""
         while True:
             try:
                 ip = socket.gethostbyname(self.name_)
-                probe = make_probe(ip, s["method"], self.index, s["tcp_port"])
-                break
+                return ip, make_probe(ip, self.s["method"], self.s["tcp_port"])
             except OSError as e:
                 log("%s: %s - retrying in 60 s" % (self.name_, e))
                 time.sleep(60)
+
+    def run(self):
+        s = self.s
+        ip, probe = self.setup()
         log("%s (%s): probing via %s every %.1f s, publishing every %d s" % (
             self.name_, ip, probe.name, s["interval"], s["window"]))
         timeout = min(max(s["interval"], 1.0), 2.0)
@@ -283,6 +312,8 @@ class Target(threading.Thread):
         samples = []
         next_publish = time.monotonic() + s["window"]
         next_discovery = 0
+        last_ok = time.monotonic()
+        down_since = None
         while True:
             t0 = time.monotonic()
             if t0 >= next_discovery:
@@ -290,11 +321,29 @@ class Target(threading.Thread):
                 next_discovery = t0 + DISCOVERY_REFRESH
             try:
                 rtt = probe.probe(timeout)
-            except OSError:
+            except OSError as e:
+                if down_since is None:
+                    log("%s: probe error: %s" % (self.name_, e))
                 rtt = None
             samples.append(rtt)
             if rtt is not None:
                 history.append((t0, rtt))
+                last_ok = t0
+                if down_since is not None:
+                    log("%s: replies again after %d s (via %s)" % (self.name_, t0 - down_since, probe.name))
+                    down_since = None
+            elif t0 - last_ok >= RESET_AFTER:
+                # No reply for a while: start over with a fresh socket and re-check the
+                # method (and the address, for host names). Fixes stale NAT/socket state.
+                if down_since is None:
+                    down_since = last_ok
+                    hint = (" (%d unmatched echo replies - NAT rewriting the packets?)" % probe.unmatched
+                            if probe.unmatched else "")
+                    log("%s: no reply for %d s via %s%s - recreating the probe" % (
+                        self.name_, t0 - last_ok, probe.name, hint))
+                probe.close()
+                ip, probe = self.setup()
+                last_ok = t0  # next reset at the earliest after another RESET_AFTER seconds
             while history and history[0][0] < t0 - BASE_SPAN:
                 history.popleft()
             if time.monotonic() >= next_publish:

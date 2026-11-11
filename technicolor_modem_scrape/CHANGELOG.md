@@ -2,6 +2,19 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.4.1 — 2026-11-11
+
+### Fixed
+- **Internet latency stuck at "Down" / 100 % loss** after a network interruption
+  (e.g. WAN or VPN reconnect) while ping itself worked. The probe used the same
+  ICMP identifier for every ping, so router/NAT state for it never expired and
+  kept pointing to the old path. Every ping now uses a new random identifier,
+  and replies are matched by a random token in the payload (robust against NAT
+  rewriting the identifier).
+- The probe now heals itself: after 30 s without any reply it recreates the
+  socket and re-checks the method (falls back to TCP if ICMP stops working).
+  Outages and recoveries are written to the app log.
+
 ## 1.4.0 — 2026-11-10
 
 ### Added
