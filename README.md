@@ -1,5 +1,7 @@
 # Technicolor TC4400 Modem Scraper
 
+![TC4400 Modem Scraper for Home Assistant](docs/images/hero.png)
+
 Publishes the signal status of a Technicolor TC4400 cable modem (downstream/upstream
 channels, power, SNR, corrected/uncorrectable errors, uptime, IPs) to MQTT with
 Home Assistant auto-discovery. A **TC4400** device with all sensors appears
@@ -16,6 +18,20 @@ The Home Assistant add-on packaging, installer and refactoring in this repositor
 were added by [coaxx77](https://github.com/coaxx77).
 
 Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), like the original.
+
+## What you get
+
+![Signal health: gauges and status](docs/images/signal.png)
+
+![Channel spectrum per frequency](docs/images/spectrum.png)
+
+![Internet latency with base latency and congestion threshold](docs/images/latency.png)
+
+![Channel table and upstream power](docs/images/channels.png)
+
+![Setup in minutes](docs/images/setup.png)
+
+<sub>Screenshots from a real TC4400 on a Vodafone cable line.</sub>
 
 Two install methods, pick one.
 

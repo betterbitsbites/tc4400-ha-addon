@@ -4,6 +4,9 @@ All notable changes to this app (add-on) are documented here.
 
 ## 1.4.1 — 2026-11-11
 
+### Added
+- App icon and logo for the app store; screenshots in the README.
+
 ### Fixed
 - **Internet latency stuck at "Down" / 100 % loss** after a network interruption
   (e.g. WAN or VPN reconnect) while ping itself worked. The probe used the same
