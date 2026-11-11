@@ -55,6 +55,7 @@ DS_POWER_OK, DS_POWER_WARN = 7, 15          # |dBmV|
 SNR_WARN, SNR_OK = 33, 36                   # dB
 US_POWER_OK, US_POWER_WARN = 47, 51         # dBmV
 GREEN, YELLOW, RED = "#2e7d32", "#f9a825", "#c62828"
+OFDM_BLUE = "#42a5f5"   # OFDM SNR: the TC4400 measures it differently, no SC-QAM thresholds
 
 
 def log(msg):
@@ -478,20 +479,23 @@ def channel_table(title, entity, upstream=False):
     else:
         head = ("| ID | Type | MHz | Power dBmV | SNR dB | Modulation | Corrected | Uncorr. |\n"
                 "|---:|:--|---:|---:|---:|:--|---:|---:|\n")
+        foot = ("\n<small>🔵 OFDM: SNR measured differently, SC-QAM thresholds don't apply. "
+                "Corrected/uncorrectable count codewords, which OFDM sends far more of.</small>\n")
         row = ("| {{ c.id }} | {{ c.type }} | {{ fmt(c.frequency) }} | {{ v(c.power) }} {{ dp(c.power) }} | "
-               "{{ v(c.snr) }} {{ sn(c.snr) }} | {{ c.profile }} | {{ c.corr }} | {{ c.uncorr }} |\n")
+               "{{ v(c.snr) }} {{ sn(c.snr, c.type) }} | {{ c.profile }} | {{ c.corr }} | {{ c.uncorr }} |\n")
     content = (
         "{%- macro fmt(f) -%}{{ (f / 1000000) | round(1) if f is number else '–' }}{%- endmacro -%}\n"
         "{%- macro v(x) -%}{{ x if x is number else '–' }}{%- endmacro -%}\n"
         "{%- macro dp(x) -%}{% if x is number %}{{ '" + mark_bad + "' if x | abs > " + str(DS_POWER_WARN) +
         " else ('" + mark_warn + "' if x | abs > " + str(DS_POWER_OK) + " else '" + mark_ok + "') }}{% endif %}{%- endmacro -%}\n"
-        "{%- macro sn(x) -%}{% if x is number %}{{ '" + mark_bad + "' if x < " + str(SNR_WARN) +
+        "{%- macro sn(x, t) -%}{% if x is number and 'OFDM' in (t or '') %}🔵{% elif x is number %}{{ '" + mark_bad + "' if x < " + str(SNR_WARN) +
         " else ('" + mark_warn + "' if x < " + str(SNR_OK) + " else '" + mark_ok + "') }}{% endif %}{%- endmacro -%}\n"
         "{%- macro us(x) -%}{% if x is number %}{{ '" + mark_bad + "' if x > " + str(US_POWER_WARN) +
         " else ('" + mark_warn + "' if x > " + str(US_POWER_OK) + " else '" + mark_ok + "') }}{% endif %}{%- endmacro -%}\n"
         "{%- set chans = state_attr('" + entity + "', 'channels') or [] -%}\n"
         + head +
         "{%- for c in chans | sort(attribute='frequency') %}\n" + row.rstrip("\n") + "\n{%- endfor %}\n"
+        + ("" if upstream else foot)
     )
     return full({"type": "markdown", "title": title, "content": content})
 
@@ -571,8 +575,10 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
             (E("status", "latency"), "TCP latency"),
             (E("summary", "down_locked"), "Downstream locked"), (E("summary", "down_channels"), "Downstream channels"),
             (E("summary", "up_locked"), "Upstream locked"), (E("summary", "up_channels"), "Upstream channels"),
-            (E("summary", "corr"), "Corrected total"), (E("summary", "uncorr"), "Uncorrectable total"),
-            (E("summary", "corr_rate"), "Corrected / min"), (E("summary", "uncorr_rate"), "Uncorrectable / min"),
+            (E("summary", "corr"), "Corrected total (SC-QAM)"), (E("summary", "uncorr"), "Uncorrectable total (SC-QAM)"),
+            (E("summary", "corr_rate"), "Corrected / min (SC-QAM)"), (E("summary", "uncorr_rate"), "Uncorrectable / min (SC-QAM)"),
+            (E("summary", "ofdm_snr_min"), "OFDM SNR (worst)"),
+            (E("summary", "ofdm_uncorr_rate"), "OFDM uncorrectable / min"),
         ]
         entities = []
         for entity, name in rows:
@@ -591,7 +597,7 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
                        {"from": DS_POWER_WARN, "color": "var(--error-color)"}]
         cards = []
         if E("summary", "snr_min"):
-            cards.append(gauge(E("summary", "snr_min"), "SNR (worst)", 25, 45,
+            cards.append(gauge(E("summary", "snr_min"), "SNR worst (SC-QAM)", 25, 45,
                                severity={"red": 0, "yellow": SNR_WARN, "green": SNR_OK}))
         if E("summary", "up_power_max"):
             cards.append(gauge(E("summary", "up_power_max"), "US power (highest)", 30, 55,
@@ -619,7 +625,8 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
     if inc["spectrum"] and have_plotly and ds_list:
         ds_power_color = ("Math.abs(c.power) > %d ? '%s' : (Math.abs(c.power) > %d ? '%s' : '%s')"
                           % (DS_POWER_WARN, RED, DS_POWER_OK, YELLOW, GREEN))
-        snr_color = "c.snr < %d ? '%s' : (c.snr < %d ? '%s' : '%s')" % (SNR_WARN, RED, SNR_OK, YELLOW, GREEN)
+        snr_color = ("/OFDM/.test(c.type || '') ? '%s' : (c.snr < %d ? '%s' : (c.snr < %d ? '%s' : '%s'))"
+                     % (OFDM_BLUE, SNR_WARN, RED, SNR_OK, YELLOW, GREEN))
         us_color = "c.power > %d ? '%s' : (c.power > %d ? '%s' : '%s')" % (US_POWER_WARN, RED, US_POWER_OK, YELLOW, GREEN)
         cards = [plotly_spectrum("Downstream power per channel", ds_list, "power", "dBmV", ds_power_color,
                                  (-DS_POWER_WARN - 3, DS_POWER_WARN + 3),
@@ -654,7 +661,8 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
 
     if inc["downstream"]:
         cards = []
-        snr = [(e, n) for e, n in ((E("summary", "snr_min"), "Worst"), (E("summary", "snr_avg"), "Average")) if e]
+        snr = [(e, n) for e, n in ((E("summary", "snr_min"), "Worst SC-QAM"), (E("summary", "snr_avg"), "Average SC-QAM"),
+                                   (E("summary", "ofdm_snr_min"), "Worst OFDM")) if e]
         pwr = [(e, n) for e, n in ((E("summary", "down_power_min"), "Min"), (E("summary", "down_power_max"), "Max")) if e]
         if snr:
             cards.append(apex_line("Downstream SNR", snr, hours, bands_snr(), 25, 45)
@@ -666,16 +674,13 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None):
 
     if inc["errors"]:
         cards = []
-        if E("summary", "uncorr"):
-            cards.append(apex_columns("Uncorrectable errors per hour", E("summary", "uncorr"), "Uncorrectable",
-                                      max(hours, 72), RED)
-                         if have_apex else stat_bars("Uncorrectable errors per hour", E("summary", "uncorr"),
-                                                     "Uncorrectable", "hour", 3))
-        if E("summary", "corr"):
-            cards.append(apex_columns("Corrected errors per hour", E("summary", "corr"), "Corrected",
-                                      max(hours, 72), YELLOW)
-                         if have_apex else stat_bars("Corrected errors per day", E("summary", "corr"),
-                                                     "Corrected", "day", 30))
+        for key, title, name, color, fallback in (
+                ("uncorr", "Uncorrectable errors per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
+                ("corr", "Corrected errors per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
+                ("ofdm_uncorr", "OFDM uncorrectable codewords per hour", "OFDM uncorrectable", OFDM_BLUE, ("hour", 3))):
+            if E("summary", key):
+                cards.append(apex_columns(title, E("summary", key), name, max(hours, 72), color)
+                             if have_apex else stat_bars(title, E("summary", key), name, *fallback))
         section("Errors", cards)
 
     if inc["latency"] and E("status", "latency"):

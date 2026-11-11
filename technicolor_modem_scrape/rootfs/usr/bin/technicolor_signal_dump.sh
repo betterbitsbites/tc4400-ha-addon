@@ -21,7 +21,7 @@
 #  * Channel loops no longer run in a subshell, so MQTT errors abort properly.
 #  * State messages are retained and empty values become null (valid JSON).
 #  * Summary sensors across all channels (min/avg SNR, power range, error totals,
-#    locked channel counts).
+#    locked channel counts), with SC-QAM and OFDM counted separately.
 #  * TCP latency, last boot timestamp, uptime in seconds, DOCSIS/software version,
 #    error rates per minute, channel lists as attributes, optional dashboard button.
 
@@ -304,7 +304,7 @@ while read -r line; do
 	# Sensor IDs follow the channel ID, independent of the ordering on the page
 	index=$(echo "$to_parse" | awk -F'\t' '{print $2}')
 	state_topic="${mqtt_topic}/downstream${index}"
-	sum_down+="$(echo "$to_parse" | awk -F'\t' '{ print $3"\t"$8"\t"$9"\t"$12"\t"$13 }')"$'\n'
+	sum_down+="$(echo "$to_parse" | awk -F'\t' '{ print $3"\t"$8"\t"$9"\t"$12"\t"$13"\t"$4 }')"$'\n'
 
 	echo "Publishing downstream channel ${index}"
 	pubConfigMessage "Down ${index}" ${state_topic} "downstream${index}" "id" "ID"
@@ -387,29 +387,46 @@ echo "Publishing summary"
 state_topic="${mqtt_topic}/summary"
 pubConfigMessage "Summary" ${state_topic} "summary" "down_channels" "Downstream Channels" "measurement"
 pubConfigMessage "Summary" ${state_topic} "summary" "down_locked" "Downstream Locked" "measurement"
-pubConfigMessage "Summary" ${state_topic} "summary" "snr_min" "Downstream SNR Min" "measurement" "dB" "signal_strength"
-pubConfigMessage "Summary" ${state_topic} "summary" "snr_avg" "Downstream SNR Avg" "measurement" "dB" "signal_strength"
 pubConfigMessage "Summary" ${state_topic} "summary" "down_power_min" "Downstream Power Min" "measurement" "dBmV"
 pubConfigMessage "Summary" ${state_topic} "summary" "down_power_max" "Downstream Power Max" "measurement" "dBmV"
-pubConfigMessage "Summary" ${state_topic} "summary" "corr" "Corrected Total" "total_increasing"
-pubConfigMessage "Summary" ${state_topic} "summary" "uncorr" "Uncorrectable Total" "total_increasing"
+# SNR and error counters: SC-QAM and OFDM separately. OFDM counts codewords at a
+# much higher rate and the TC4400 reports its SNR differently, so mixing them
+# makes totals and the worst SNR meaningless.
+pubConfigMessage "Summary" ${state_topic} "summary" "snr_min" "Downstream SNR Min (SC-QAM)" "measurement" "dB" "signal_strength"
+pubConfigMessage "Summary" ${state_topic} "summary" "snr_avg" "Downstream SNR Avg (SC-QAM)" "measurement" "dB" "signal_strength"
+pubConfigMessage "Summary" ${state_topic} "summary" "corr" "Corrected Total (SC-QAM)" "total_increasing"
+pubConfigMessage "Summary" ${state_topic} "summary" "uncorr" "Uncorrectable Total (SC-QAM)" "total_increasing"
+pubConfigMessage "Summary" ${state_topic} "summary" "corr_rate" "Corrected per Minute (SC-QAM)" "measurement" "errors/min"
+pubConfigMessage "Summary" ${state_topic} "summary" "uncorr_rate" "Uncorrectable per Minute (SC-QAM)" "measurement" "errors/min"
+pubConfigMessage "Summary" ${state_topic} "summary" "ofdm_channels" "OFDM Channels" "measurement"
+pubConfigMessage "Summary" ${state_topic} "summary" "ofdm_snr_min" "OFDM SNR Min" "measurement" "dB" "signal_strength"
+pubConfigMessage "Summary" ${state_topic} "summary" "ofdm_corr" "OFDM Corrected Codewords" "total_increasing"
+pubConfigMessage "Summary" ${state_topic} "summary" "ofdm_uncorr" "OFDM Uncorrectable Codewords" "total_increasing"
+pubConfigMessage "Summary" ${state_topic} "summary" "ofdm_corr_rate" "OFDM Corrected per Minute" "measurement" "codewords/min"
+pubConfigMessage "Summary" ${state_topic} "summary" "ofdm_uncorr_rate" "OFDM Uncorrectable per Minute" "measurement" "codewords/min"
 pubConfigMessage "Summary" ${state_topic} "summary" "up_channels" "Upstream Channels" "measurement"
 pubConfigMessage "Summary" ${state_topic} "summary" "up_locked" "Upstream Locked" "measurement"
 pubConfigMessage "Summary" ${state_topic} "summary" "up_power_min" "Upstream Power Min" "measurement" "dBmV"
 pubConfigMessage "Summary" ${state_topic} "summary" "up_power_max" "Upstream Power Max" "measurement" "dBmV"
-pubConfigMessage "Summary" ${state_topic} "summary" "corr_rate" "Corrected per Minute" "measurement" "errors/min"
-pubConfigMessage "Summary" ${state_topic} "summary" "uncorr_rate" "Uncorrectable per Minute" "measurement" "errors/min"
 
-# Numeric aggregates; fields that are empty or non-numeric are skipped
+# Numeric aggregates; fields that are empty or non-numeric are skipped.
+# Record per downstream channel: lock, snr, power, corrected, uncorrectable, type
 state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
 	function num(x) { return x ~ /^-?[0-9]+(\.[0-9]+)?$/ }
 	function v(x)   { return x == "" ? "null" : x }
 	NF >= 3 {
 		dn++; if ($1 == "Locked") dl++
-		if (num($2)) { s += $2; sn++; if (smin == "" || $2 < smin) smin = $2 }
 		if (num($3)) { if (pmin == "" || $3 < pmin) pmin = $3; if (pmax == "" || $3 > pmax) pmax = $3 }
-		if (num($4)) c += $4
-		if (num($5)) u += $5
+		if ($6 ~ /OFDM/) {
+			on++
+			if (num($2) && (osmin == "" || $2 < osmin)) osmin = $2
+			if (num($4)) oc += $4
+			if (num($5)) ou += $5
+		} else {
+			if (num($2)) { s += $2; sn++; if (smin == "" || $2 < smin) smin = $2 }
+			if (num($4)) c += $4
+			if (num($5)) u += $5
+		}
 	}
 	END {
 		n = split(up, lines, "\n")
@@ -419,25 +436,34 @@ state_message=$(printf '%s' "$sum_down" | awk -F'\t' -v up="$sum_up" '
 			if (num(f[2])) { if (upmin == "" || f[2] < upmin) upmin = f[2]; if (upmax == "" || f[2] > upmax) upmax = f[2] }
 		}
 		avg = sn ? sprintf("%.1f", s / sn) : ""
-		printf "{ \"down_channels\": %d, \"down_locked\": %d, \"snr_min\": %s, \"snr_avg\": %s, ", dn, dl, v(smin), v(avg)
-		printf "\"down_power_min\": %s, \"down_power_max\": %s, \"corr\": %d, \"uncorr\": %d, ", v(pmin), v(pmax), c, u
+		printf "{ \"down_channels\": %d, \"down_locked\": %d, \"down_power_min\": %s, \"down_power_max\": %s, ", dn, dl, v(pmin), v(pmax)
+		printf "\"snr_min\": %s, \"snr_avg\": %s, \"corr\": %.0f, \"uncorr\": %.0f, ", v(smin), v(avg), c, u
+		printf "\"ofdm_channels\": %d, \"ofdm_snr_min\": %s, \"ofdm_corr\": %s, \"ofdm_uncorr\": %s, ", on, v(osmin), on ? sprintf("%.0f", oc) : "null", on ? sprintf("%.0f", ou) : "null"
 		printf "\"up_channels\": %d, \"up_locked\": %d, \"up_power_min\": %s, \"up_power_max\": %s }", un, ul, v(upmin), v(upmax)
 	}')
 # Error rates per minute since the previous run (null on first run or after a counter reset)
-corr_total=$(echo "$state_message" | sed -nE 's/.*"corr": ([0-9]+).*/\1/p')
-uncorr_total=$(echo "$state_message" | sed -nE 's/.*"uncorr": ([0-9]+).*/\1/p')
+jnum() { echo "$state_message" | sed -nE "s/.*\"$1\": ([0-9]+).*/\1/p"; }
+counters="$(jnum corr) $(jnum uncorr) $(jnum ofdm_corr) $(jnum ofdm_uncorr)"
 counter_file="${STATE_DIR:-/tmp}/technicolor_${modem_id}_counters"
 now_epoch=$(date +%s)
-prev_epoch=""; prev_corr=""; prev_uncorr=""
-[ -f "$counter_file" ] && read -r prev_epoch prev_corr prev_uncorr < "$counter_file"
-rates=$(awk -v t="$now_epoch" -v pt="$prev_epoch" -v c="$corr_total" -v pc="$prev_corr" -v u="$uncorr_total" -v pu="$prev_uncorr" '
+previous=""
+[ -f "$counter_file" ] && previous=$(cat "$counter_file")
+rates=$(awk -v now="$now_epoch $counters" -v prev="$previous" '
 	BEGIN {
-		dt = t - pt
-		if (pt == "" || dt <= 0 || c < pc || u < pu) { print "null null"; exit }
-		printf "%.2f %.2f", (c - pc) * 60 / dt, (u - pu) * 60 / dt
+		n = split(now, a, " "); m = split(prev, b, " ")
+		dt = a[1] - b[1]
+		out = ""
+		for (i = 2; i <= 5; i++) {
+			r = "null"
+			if (m >= i && dt > 0 && a[i] != "" && b[i] != "" && a[i] + 0 >= b[i] + 0)
+				r = sprintf("%.2f", (a[i] - b[i]) * 60 / dt)
+			out = out (i > 2 ? " " : "") r
+		}
+		print out
 	}')
-echo "$now_epoch $corr_total $uncorr_total" > "$counter_file" 2>/dev/null
-state_message="${state_message% \}}, \"corr_rate\": ${rates% *}, \"uncorr_rate\": ${rates#* } }"
+echo "$now_epoch $counters" > "$counter_file" 2>/dev/null
+read -r r_corr r_uncorr r_ocorr r_ouncorr <<< "$rates"
+state_message="${state_message% \}}, \"corr_rate\": ${r_corr}, \"uncorr_rate\": ${r_uncorr}, \"ofdm_corr_rate\": ${r_ocorr}, \"ofdm_uncorr_rate\": ${r_ouncorr} }"
 mqtt_pub -r "${state_topic}" "${state_message}" || { echoerr "MQTT error posting summary to topic ${state_topic}" ; exit 20 ; }
 
 # Channel lists as attributes (for per-channel charts and tables)

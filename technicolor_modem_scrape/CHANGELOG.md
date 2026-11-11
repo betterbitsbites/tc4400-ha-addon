@@ -2,6 +2,27 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.5.0 — 2026-11-11
+
+### Changed
+- **SC-QAM and OFDM are summarised separately.** OFDM channels count codewords
+  at a far higher rate (billions) and the TC4400 reports their SNR differently,
+  which made *Corrected/Uncorrectable Total*, *… per Minute* and the worst SNR
+  meaningless. These summary sensors now cover SC-QAM channels only (names end
+  in "(SC-QAM)"); downstream power still covers all channels.
+- Dashboard: SNR gauge and charts labelled SC-QAM; OFDM SNR shown in blue in the
+  spectrum and with 🔵 in the channel table instead of red; status card and
+  error charts include the new OFDM sensors.
+
+### Added
+- OFDM sensors: *OFDM Channels*, *OFDM SNR Min*, *OFDM Corrected / Uncorrectable
+  Codewords* and *… per Minute*.
+
+### Note
+- The SC-QAM error totals drop once after the update (OFDM no longer included).
+  Home Assistant treats this as a counter reset; error rates show no value for
+  one scrape.
+
 ## 1.4.1 — 2026-11-11
 
 ### Added

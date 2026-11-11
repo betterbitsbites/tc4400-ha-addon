@@ -48,8 +48,13 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
   IP addresses
 - **Down N** / **Up N**: per channel frequency, width, power, SNR (downstream),
   modulation, lock/bonding status, corrected/uncorrectable errors (downstream)
-- **Summary**: channel and locked-channel counts, worst/average SNR, power ranges,
-  error totals and errors per minute
+- **Summary**: channel and locked-channel counts, downstream/upstream power ranges,
+  and — separately for **SC-QAM** and **OFDM** — worst SNR (SC-QAM also average),
+  error totals and errors per minute. OFDM channels count codewords at a far
+  higher rate and the TC4400 reports their SNR differently, so they get their own
+  sensors (*OFDM SNR Min*, *OFDM Corrected/Uncorrectable Codewords*, *… per
+  Minute*) instead of distorting the SC-QAM values. The dashboard shows OFDM SNR
+  in blue (🔵) without SC-QAM thresholds.
 - **Downstream / Upstream Channel List**: number of channels, with all channels
   as the `channels` attribute (used by the dashboard's spectrum charts and tables)
 - **Create Dashboard** (button): builds the dashboard, see below
