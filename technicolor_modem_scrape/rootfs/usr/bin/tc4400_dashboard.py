@@ -318,15 +318,48 @@ def publish_target_select(ha, settings, modem_id, targets):
 # --------------------------------------------------------------------------
 # Modem power: switch for power cycling, sensor for the power draw
 # --------------------------------------------------------------------------
+def power_options():
+    """Entity IDs from the app options (power_switch / power_sensor); they win
+    over the selects on the device page."""
+    try:
+        with open(OPTIONS_FILE) as f:
+            opts = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for key, opt in (("switch", "power_switch"), ("sensor", "power_sensor")):
+        value = str(opts.get(opt) or "").strip()
+        if re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", value):
+            out[key] = value
+        elif value:
+            log("option %s ignored: '%s' is not an entity ID (e.g. switch.modem_plug)" % (opt, value))
+    return out
+
+
 def load_power():
     try:
         with open(POWER_FILE) as f:
-            return json.load(f)
+            power = json.load(f)
     except (OSError, ValueError):
-        return {}
+        power = {}
+    power.update(power_options())
+    return power
 
 
 def store_power(data):
+    """Save; values that only come from the app options are not written as the
+    device selection, so clearing the option falls back to the select again."""
+    try:
+        with open(POWER_FILE) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        raw = {}
+    data = dict(data)
+    for key in power_options():
+        if key in raw:
+            data[key] = raw[key]
+        else:
+            data.pop(key, None)
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(POWER_FILE, "w") as f:
         json.dump(data, f)
@@ -350,7 +383,7 @@ def power_choices(ha):
 def label_to_entity(label):
     if not label or label.strip() == NONE_LABEL:
         return ""
-    m = re.search(r"\(((?:switch|sensor)\.[^)\s]+)\)\s*$", label)
+    m = re.search(r"\(([a-z_]+\.[^)\s]+)\)\s*$", label)
     return m.group(1) if m else None
 
 
@@ -378,6 +411,11 @@ def publish_power(ha, modem_id):
     for kind, choices, name, icon in (("switch", switches, "Modem Power Switch", "mdi:power-socket-eu"),
                                       ("sensor", sensors, "Modem Power Sensor", "mdi:flash")):
         current = power.get(kind) or ""
+        if current and current not in [c[1] for c in choices]:
+            st = next((s for s in ha.call("get_states") or [] if s.get("entity_id") == current), None)
+            if st:  # e.g. an input_boolean or light set in the app options
+                choices = choices + [("%s (%s)" % ((st.get("attributes") or {}).get("friendly_name") or current,
+                                                    current), current)]
         labels = [NONE_LABEL] + [c[0] for c in choices]
         state = next((c[0] for c in choices if c[1] == current), None)
         if current and state is None:  # chosen entity is gone: keep it visible
@@ -414,10 +452,18 @@ def cmd_power_select(kind, label):
     entity = label_to_entity(label)
     if entity is None:
         raise ValueError("unknown %s choice: %s" % (kind, label))
-    power = load_power()
+    try:
+        with open(POWER_FILE) as f:
+            power = json.load(f)
+    except (OSError, ValueError):
+        power = {}
     power[kind] = entity
-    store_power(power)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(POWER_FILE, "w") as f:
+        json.dump(power, f)
     log("Modem power %s set to %s" % (kind, entity or "none"))
+    if kind in power_options():
+        log("note: the app option power_%s is set and takes precedence over this choice" % kind)
     settings = load_settings("")
     ha = connect()
     try:
@@ -474,7 +520,7 @@ def cmd_restart():
         log("Restarting modem: %s off for %d s" % (switch, off_seconds))
         notify(ha, "TC4400: restarting modem",
                "Switching **%s** off for %d s. The internet will be down for a few minutes." % (switch, off_seconds))
-        ha.call("call_service", domain="switch", service="turn_off", target={"entity_id": switch})
+        ha.call("call_service", domain=switch.split(".")[0], service="turn_off", target={"entity_id": switch})
         for _ in range(10):
             time.sleep(1)
             s = get_state(ha, switch)
@@ -492,7 +538,7 @@ def cmd_restart():
         try:
             ha = connect()
             try:
-                ha.call("call_service", domain="switch", service="turn_on", target={"entity_id": switch})
+                ha.call("call_service", domain=switch.split(".")[0], service="turn_on", target={"entity_id": switch})
                 for _ in range(15):
                     time.sleep(1)
                     s = get_state(ha, switch)

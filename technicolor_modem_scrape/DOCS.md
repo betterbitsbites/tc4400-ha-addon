@@ -29,6 +29,8 @@ based on scripts by mmiller7. License: CC BY-NC-SA 4.0.
 | `mqtt_topic_prefix` | `homeassistant/sensor` | MQTT discovery prefix |
 | `mqtt_uid_prefix` | `cablemodem` | Prefix for unique IDs |
 | `verbose` | `false` | Log the full scraper output on every run |
+| `power_switch` | *(empty)* | Entity ID of the modem's power switch; empty = dropdown on the device page |
+| `power_sensor` | *(empty)* | Entity ID of the modem's power sensor; empty = dropdown on the device page |
 | `restart_off_seconds` | `15` | How long *Restart Modem* keeps the power switch off |
 | `history_length` | `30` | Scrapes kept per channel for the trend sparklines in the channel table (`0` = off) |
 | `dashboard_title` | `Cable modem` | Title of the generated dashboard |
@@ -76,6 +78,11 @@ power-cycle it and show its power draw. On the TC4400 device page, section
 
 - **Modem Power Switch** — the switch the modem is plugged into
 - **Modem Power Sensor** — optional, a power sensor (W) for the modem's draw
+
+Alternatively enter the entity IDs in the app options `power_switch` and
+`power_sensor` (e.g. `switch.modem_plug`). If set, they take precedence over the
+dropdowns, which then show them; leave them empty to use the dropdowns. Any
+entity that can be switched on and off works (`switch`, `input_boolean`, `light`, …).
 
 Once a switch is chosen, the device gets:
 

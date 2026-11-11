@@ -1,5 +1,5 @@
 name: Technicolor TC4400 Modem Scraper
-version: "1.7.0"
+version: "1.7.1"
 slug: technicolor_modem_scrape
 description: Publishes TC4400 cable modem signal levels, SNR and errors to MQTT (auto-discovered by Home Assistant). Scraper by Philipp Reichmuth (phrxmd).
 url: https://github.com/coaxx77/tc4400-ha-addon
@@ -21,6 +21,8 @@ options:
   mqtt_uid_prefix: cablemodem
   verbose: false
   history_length: 30
+  power_switch: ""
+  power_sensor: ""
   restart_off_seconds: 15
   dashboard_title: Cable modem
   dashboard_url: cable-modem
@@ -47,6 +49,8 @@ schema:
   mqtt_uid_prefix: str
   verbose: bool
   history_length: int(0,120)
+  power_switch: str?
+  power_sensor: str?
   restart_off_seconds: int(5,300)
   dashboard_title: str
   dashboard_url: match(^[a-z0-9_]+(-[a-z0-9_]+)+$)

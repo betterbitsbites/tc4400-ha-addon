@@ -57,6 +57,12 @@ configuration:
   history_length:
     name: Channel history (scrapes)
     description: Number of scrapes kept per channel for the trend sparklines in the channel table (0 = off)
+  power_switch:
+    name: Modem power switch (entity ID)
+    description: Optional, e.g. switch.modem_plug - the switch the modem is plugged into. Empty = use the "Modem Power Switch" dropdown on the TC4400 device page. Must work locally (no cloud plug)!
+  power_sensor:
+    name: Modem power sensor (entity ID)
+    description: Optional, e.g. sensor.modem_plug_power - power draw of the modem in W. Empty = use the "Modem Power Sensor" dropdown on the TC4400 device page.
   restart_off_seconds:
     name: Modem restart - off time (seconds)
     description: How long the "Restart Modem" button keeps the modem power switch off

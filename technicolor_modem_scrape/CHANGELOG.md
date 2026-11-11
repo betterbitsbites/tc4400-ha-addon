@@ -2,6 +2,14 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.7.1 — 2026-11-11
+
+### Added
+- App options **`power_switch`** and **`power_sensor`** (entity IDs): an
+  alternative to the dropdowns on the TC4400 device page. If set, they take
+  precedence; empty = the dropdowns apply. Any on/off entity works for the
+  restart (switch, input_boolean, light, …).
+
 ## 1.7.0 — 2026-11-11
 
 ### Added
