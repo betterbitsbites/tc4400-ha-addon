@@ -1295,6 +1295,20 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
                                        links=chan_links("upstream", ("power",))))
         section("Channels", cards, span=3)
 
+    # ---- row 6: every channel value as a clickable row (click = history popup) --
+    if inc["channel_table"]:
+        cards = []
+        for direction, key, title in (("downstream", "power", "Downstream power"),
+                                      ("downstream", "snr", "Downstream SNR"),
+                                      ("downstream", "corr", "Downstream corrected"),
+                                      ("downstream", "uncorr", "Downstream uncorrectable"),
+                                      ("upstream", "power", "Upstream power")):
+            rows = [{"entity": e, "name": "Ch %d" % n} for n, e in ent.channels(direction, key)]
+            if rows:
+                cards.append(width({"type": "entities", "title": title, "show_header_toggle": False,
+                                    "state_color": False, "entities": rows}, 9))
+        section("Channel details", cards, span=3)
+
     return {"title": "TC4400", "path": VIEW_PATH, "icon": "mdi:router-network",
             "type": "sections", "max_columns": 3, "sections": sections}
 

@@ -2,6 +2,14 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.10.0 — 2026-11-12
+
+### Added
+- Dashboard section **Channel details** at the bottom: every channel value as a
+  clickable row — downstream power, SNR, corrected and uncorrectable, upstream
+  power. A click opens the small history popup of that sensor (the links in the
+  channel table can only open the history page).
+
 ## 1.9.1 — 2026-11-12
 
 ### Added

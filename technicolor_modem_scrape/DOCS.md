@@ -165,6 +165,7 @@ sections stack in the same order.
 | 3 | Stability | Locked channels (7 days), response time of the modem | same, as charts |
 | 4 | Errors | Corrected/uncorrectable per hour/day, SC-QAM and OFDM | Columns per hour |
 | 5 | Channels | Table of all channels with 🟢🟡🔴 markers and sparklines of the last 30 scrapes; click a value for that channel's history | same |
+| 6 | Channel details | Every channel value as a clickable row (click = history popup): downstream power, SNR, corrected, uncorrectable; upstream power | same |
 
 **Optional extra cards** — install from the Marketplace / HACS (*Dashboard*
 category), then press *Create Dashboard* again:
