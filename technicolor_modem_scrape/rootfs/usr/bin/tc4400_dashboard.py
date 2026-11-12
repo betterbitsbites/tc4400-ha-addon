@@ -68,6 +68,8 @@ SECTIONS = ("status", "power", "gauges", "internet", "spectrum", "channel_table"
 # Rough DOCSIS rules of thumb (256QAM downstream). Used for colours and bands.
 DS_POWER_OK, DS_POWER_WARN = 7, 15          # |dBmV|
 SNR_WARN, SNR_OK = 33, 36                   # dB
+# OFDM MER: Vodafone asks for at least 28 dB; 1024-QAM needs about 34 dB
+OFDM_SNR_WARN, OFDM_SNR_OK = 28, 34         # dB
 US_POWER_OK, US_POWER_WARN = 47, 51         # dBmV
 GREEN, YELLOW, RED = "#2e7d32", "#f9a825", "#c62828"
 OFDM_BLUE = "#42a5f5"   # OFDM SNR: the TC4400 measures it differently, no SC-QAM thresholds
@@ -1141,9 +1143,13 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
         if E("summary", "snr_min"):
             cards.append(gauge(E("summary", "snr_min"), "SNR worst (SC-QAM)", 25, 45,
                                severity={"red": 0, "yellow": SNR_WARN, "green": SNR_OK}))
-        if E("summary", "up_power_max"):
-            cards.append(gauge(E("summary", "up_power_max"), "Upstream max", 30, 55,
-                               severity={"green": 0, "yellow": US_POWER_OK, "red": US_POWER_WARN}))
+        if E("summary", "ofdm_snr_min"):
+            cards.append(gauge(E("summary", "ofdm_snr_min"), "SNR worst (OFDM)", 20, 45,
+                               severity={"red": 0, "yellow": OFDM_SNR_WARN, "green": OFDM_SNR_OK}))
+        for key, name in (("up_power_min", "Upstream min"), ("up_power_max", "Upstream max")):
+            if E("summary", key):
+                cards.append(gauge(E("summary", key), name, 30, 55,
+                                   severity={"green": 0, "yellow": US_POWER_OK, "red": US_POWER_WARN}))
         if E("summary", "down_power_min"):
             cards.append(gauge(E("summary", "down_power_min"), "Downstream min", -20, 20, segments=ds_segments))
         if E("summary", "down_power_max"):

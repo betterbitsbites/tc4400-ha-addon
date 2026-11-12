@@ -2,6 +2,15 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.8.3 — 2026-11-12
+
+### Added
+- Dashboard: **SNR worst (OFDM)** gauge next to the SC-QAM one. Red below
+  28 dB (Vodafone's minimum for OFDM), yellow up to 34 dB (about what 1024-QAM
+  needs), green above.
+- **Upstream min** gauge, so the gauges form pairs: SNR SC-QAM | OFDM,
+  upstream min | max, downstream min | max.
+
 ## 1.8.2 — 2026-11-11
 
 ### Changed
