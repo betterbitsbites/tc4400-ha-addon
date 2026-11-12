@@ -160,10 +160,11 @@ sections stack in the same order.
 | 1 | Modem | Restart button with confirmation, switch state (read-only), power draw, last power cycle and who triggered it, last boot, DOCSIS, software | same |
 | 2 | Downstream | SNR and power range history | plus Fritz!Box-style spectrum per channel (*plotly-graph*); charts with coloured good/warning/bad ranges (*apexcharts-card*) |
 | 2 | Upstream | Power history | plus spectrum; coloured ranges |
+| 2 | Channel history | Downstream power and SNR of every channel over time (one line per channel) | same |
 | 3 | Internet latency | Status line per target (average, P95, min/max, jitter, loss) and history graph | Chart with P95 shading, average, base latency and congestion threshold |
 | 3 | Stability | Locked channels (7 days), response time of the modem | same, as charts |
 | 4 | Errors | Corrected/uncorrectable per hour/day, SC-QAM and OFDM | Columns per hour |
-| 5 | Channels | Table of all channels with 🟢🟡🔴 markers and sparklines of the last 30 scrapes | same |
+| 5 | Channels | Table of all channels with 🟢🟡🔴 markers and sparklines of the last 30 scrapes; click a value for that channel's history | same |
 
 **Optional extra cards** — install from the Marketplace / HACS (*Dashboard*
 category), then press *Create Dashboard* again:

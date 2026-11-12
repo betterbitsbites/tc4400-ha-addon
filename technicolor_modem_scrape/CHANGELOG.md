@@ -2,6 +2,16 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.9.0 — 2026-11-12
+
+### Added
+- Dashboard row **Channel history**: downstream power and SNR of every channel
+  over time, one line per channel (built-in history graphs; click a channel in
+  the legend to hide it).
+- **Clickable values in the channel tables**: power, SNR, corrected and
+  uncorrectable errors and the trend sparklines link to the history of that
+  channel's sensor.
+
 ## 1.8.3 — 2026-11-12
 
 ### Added

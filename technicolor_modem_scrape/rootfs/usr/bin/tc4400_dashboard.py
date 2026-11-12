@@ -909,7 +909,7 @@ def plotly_spectrum(title, entity, value, unit, color_js, yrange=None, lines=())
 SPARK_CHARS = "▁▂▃▄▅▆▇█"
 
 
-def channel_table(title, entity, upstream=False, history=None):
+def channel_table(title, entity, upstream=False, history=None, links=None, hours=24):
     """Markdown table from the channel list attributes (built-in card).
 
     With a history entity, every row gets text sparklines of the last scrapes:
@@ -951,6 +951,14 @@ def channel_table(title, entity, upstream=False, history=None):
         "' if x is number and x > " + str(US_POWER_OK) + " else '" + c_ok + "') }}{%- endmacro -%}\n"
         "{%- set chans = state_attr('" + entity + "', 'channels') or [] -%}\n"
     )
+    # values are links to the history page of that channel's sensor
+    # (links: {N: {"snr": entity, ...}} from the registry; sensors are numbered by
+    # channel ID downstream and by row upstream)
+    macros += ("{%- set links = " + json.dumps({str(k): v for k, v in (links or {}).items()}) + " -%}\n"
+               "{%- set start = (now() - timedelta(hours=" + str(int(hours)) + ")).isoformat() | urlencode -%}\n"
+               "{%- macro ln(c, key, text) -%}{%- set e = links.get(" + ("c.channel" if upstream else "c.id") + " | int(0) | string, {}).get(key) -%}"
+               "{%- if e -%}[{{ text }}](/history?entity_id={{ e }}&start_date={{ start }})"
+               "{%- else -%}{{ text }}{%- endif -%}{%- endmacro -%}\n")
     if history:
         macros += ("{%- set hist = state_attr('" + history + "', 'up' if " + ("true" if upstream else "false") +
                    " else 'down') or {} -%}\n"
@@ -959,26 +967,28 @@ def channel_table(title, entity, upstream=False, history=None):
         head = "| Ch | ID | MHz | Power dBmV | Modulation | Lock |"
         sep = "|---:|---:|---:|---:|:--|:--|"
         row = ("| {{ c.channel }} | {{ c.id }}{{ typ(c.type) }} | {{ fmt(c.frequency) }} | "
-               "{{ v(c.power) }} {{ us(c.power) }} | {{ c.profile }} | {{ c.lockstatus }} |")
+               "{{ ln(c, 'power', v(c.power)) }} {{ us(c.power) }} | {{ c.profile }} | {{ c.lockstatus }} |")
         if history:
             head += " Power · last {{ n }} |"
             sep += ":--|"
-            row += " {% set h = hist.get(c.id | string, {}) %}{{ spark(h.power, 3, uscol(c.power)) }} |"
-        foot = ""
+            row += " {% set h = hist.get(c.id | string, {}) %}{{ ln(c, 'power', spark(h.power, 3, uscol(c.power))) }} |"
+        foot = "\n<small>Click a value for its history.</small>\n" if links else ""
     else:
         head = "| ID | MHz | Power dBmV | SNR dB | Modulation | Corrected | Uncorr. |"
         sep = "|---:|---:|---:|---:|:--|---:|---:|"
-        row = ("| {{ c.id }}{{ typ(c.type) }} | {{ fmt(c.frequency) }} | {{ v(c.power) }} {{ dp(c.power) }} | "
-               "{{ v(c.snr) }} {{ sn(c.snr, c.type) }} | {{ c.profile }} | {{ c.corr }} | {{ c.uncorr }} |")
+        row = ("| {{ c.id }}{{ typ(c.type) }} | {{ fmt(c.frequency) }} | {{ ln(c, 'power', v(c.power)) }} {{ dp(c.power) }} | "
+               "{{ ln(c, 'snr', v(c.snr)) }} {{ sn(c.snr, c.type) }} | {{ c.profile }} | "
+               "{{ ln(c, 'corr', c.corr) }} | {{ ln(c, 'uncorr', c.uncorr) }} |")
         if history:
             head += " SNR · last {{ n }} | Uncorr. per scrape |"
             sep += ":--|:--|"
-            row += (" {% set h = hist.get(c.id | string, {}) %}{{ spark(h.snr, 3, snrcol(c.snr, c.type)) }} | "
-                    "{{ espark(h.uncorr) }} |")
+            row += (" {% set h = hist.get(c.id | string, {}) %}{{ ln(c, 'snr', spark(h.snr, 3, snrcol(c.snr, c.type))) }} | "
+                    "{{ ln(c, 'uncorr', espark(h.uncorr)) }} |")
         foot = ("\n<small>🔵 OFDM: SNR measured differently, SC-QAM thresholds don't apply. "
                 "Corrected/uncorrectable count codewords, which OFDM sends far more of."
                 + (" Trends: last scrapes, newest on the right; the number is the sum of the "
-                   "uncorrectable errors shown." if history else "") + "</small>\n")
+                   "uncorrectable errors shown." if history else "")
+                + (" Click a value for its history." if links else "") + "</small>\n")
     content = (
         macros + head + "\n" + sep + "\n"
         "{%- for c in chans | sort(attribute='frequency') %}\n" + row + "\n{%- endfor %}\n" + foot
@@ -1114,6 +1124,14 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
         return history(title, series, h)
 
     E = ent.get
+
+    def chan_links(direction, keys):
+        out = {}
+        for key in keys:
+            for n, entity in ent.channels(direction, key):
+                out.setdefault(n, {})[key] = entity
+        return out
+
     ds_list, us_list = E("channels_down", "count"), E("channels_up", "count")
     hist = E("channel_history", "scrapes")
     lat_status = [k["status"] for k in (latency or {}).values() if k.get("status")]
@@ -1195,6 +1213,18 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
             cards.append(line("Power history", series, hours, bands_us_power(), 30, 55))
     section("Upstream", cards)
 
+    # ---- row 2b: every channel over time (built-in history graphs) -------
+    # (upstream per channel is already in the Upstream section)
+    if inc["downstream"]:
+        cards = []
+        for direction, key, title, on in (("downstream", "power", "Downstream power per channel (dBmV)", inc["downstream"]),
+                                          ("downstream", "snr", "Downstream SNR per channel (dB)", inc["downstream"])):
+            series = [(e, "Ch %d" % n) for n, e in ent.channels(direction, key)]
+            if on and series:
+                cards.append(history(title, series, hours))
+        n = len(cards)
+        section("Channel history", [width(c, 36 // n if n else 36) for c in cards], span=3)
+
     # ---- row 3: internet latency | stability -----------------------------
     lat_cards = []
     if inc["internet"] and latency:
@@ -1244,9 +1274,11 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
     if inc["channel_table"] and (ds_list or us_list):
         cards = []
         if ds_list:
-            cards.append(channel_table("Downstream channels", ds_list, history=hist))
+            cards.append(channel_table("Downstream channels", ds_list, history=hist, hours=hours,
+                                       links=chan_links("downstream", ("power", "snr", "corr", "uncorr"))))
         if us_list:
-            cards.append(channel_table("Upstream channels", us_list, upstream=True, history=hist))
+            cards.append(channel_table("Upstream channels", us_list, upstream=True, history=hist, hours=hours,
+                                       links=chan_links("upstream", ("power",))))
         section("Channels", cards, span=3)
 
     return {"title": "TC4400", "path": VIEW_PATH, "icon": "mdi:router-network",
