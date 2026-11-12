@@ -70,6 +70,10 @@ DS_POWER_OK, DS_POWER_WARN = 7, 15          # |dBmV|
 SNR_WARN, SNR_OK = 33, 36                   # dB
 # OFDM MER: Vodafone asks for at least 28 dB; 1024-QAM needs about 34 dB
 OFDM_SNR_WARN, OFDM_SNR_OK = 28, 34         # dB
+
+OFDM_NOTE = ("OFDM uses LDPC error correction, which repairs codewords all the time, so a high "
+             "number of **corrected** codewords is normal and costs no data. What matters is "
+             "**uncorrectable**: those codewords are lost.")
 US_POWER_OK, US_POWER_WARN = 47, 51         # dBmV
 GREEN, YELLOW, RED = "#2e7d32", "#f9a825", "#c62828"
 OFDM_BLUE = "#42a5f5"   # OFDM SNR: the TC4400 measures it differently, no SC-QAM thresholds
@@ -985,7 +989,9 @@ def channel_table(title, entity, upstream=False, history=None, links=None, hours
             row += (" {% set h = hist.get(c.id | string, {}) %}{{ ln(c, 'snr', spark(h.snr, 3, snrcol(c.snr, c.type))) }} | "
                     "{{ ln(c, 'uncorr', espark(h.uncorr)) }} |")
         foot = ("\n<small>🔵 OFDM: SNR measured differently, SC-QAM thresholds don't apply. "
-                "Corrected/uncorrectable count codewords, which OFDM sends far more of."
+                "Corrected/uncorrectable count codewords, which OFDM sends far more of. "
+                "Many corrected codewords are normal on OFDM (LDPC corrects all the time); "
+                "only uncorrectable ones are lost data."
                 + (" Trends: last scrapes, newest on the right; the number is the sum of the "
                    "uncorrectable errors shown." if history else "")
                 + (" Click a value for its history." if links else "") + "</small>\n")
@@ -1063,6 +1069,9 @@ def error_rows(E):
                       ("ofdm_uncorr_rate", "Uncorrectable / min"), ("ofdm_corr_rate", "Corrected / min"),
                       ("ofdm_uncorr", "Uncorrectable since boot"), ("ofdm_corr", "Corrected since boot")))):
         found = [{"entity": E("summary", k), "name": n} for k, n in items if E("summary", k)]
+        if found and label == "OFDM":
+            found.append({"type": "text", "icon": "mdi:information-outline", "name": "Corrected is normal",
+                          "text": "only uncorrectable is lost"})
         if found:
             rows += [{"type": "section", "label": label}] + found
     return rows
@@ -1256,14 +1265,19 @@ def build_dashboard(ent, settings, have_plotly, have_apex, latency=None, power=N
         cards = []
         # ApexCharts: from the reset-safe rate sensors. Built-in fallback: long-term
         # statistics of the totals (total_increasing, HA treats a drop as a reset).
+        def ofdm_note():
+            return full({"type": "markdown", "content": "ℹ️ <small>" + OFDM_NOTE + "</small>"})
+
         for key, rate, title, name, color, fallback in (
                 ("uncorr", "uncorr_rate", "Uncorrectable per hour (SC-QAM)", "Uncorrectable", RED, ("hour", 3)),
                 ("corr", "corr_rate", "Corrected per hour (SC-QAM)", "Corrected", YELLOW, ("day", 30)),
                 ("ofdm_uncorr", "ofdm_uncorr_rate", "Uncorrectable codewords per hour (OFDM)", "OFDM uncorrectable",
                  OFDM_BLUE, ("hour", 3)),
                 # corrected codewords are normal on OFDM (LDPC); useful to compare before/after
-                ("ofdm_corr", "ofdm_corr_rate", "Corrected codewords per hour (OFDM)", "OFDM corrected",
+                ("ofdm_corr", "ofdm_corr_rate", "Corrected codewords per hour (OFDM, normal)", "OFDM corrected",
                  "#90caf9", ("day", 30))):
+            if key == "ofdm_uncorr" and (E("summary", rate) or E("summary", key)):
+                cards.append(ofdm_note())
             if have_apex and E("summary", rate):
                 cards.append(half(apex_columns(title, E("summary", rate), name, max(hours, 72), color), 3))
             elif E("summary", key):

@@ -2,6 +2,15 @@
 
 All notable changes to this app (add-on) are documented here.
 
+## 1.9.1 — 2026-11-12
+
+### Added
+- Dashboard explains that **many corrected codewords are normal on OFDM**
+  (LDPC error correction works all the time) and only uncorrectable codewords
+  are lost data: a hint row in the *Status* list under OFDM, a note above the
+  OFDM error charts, "(OFDM, normal)" in the corrected chart's title and a
+  sentence in the channel table legend.
+
 ## 1.9.0 — 2026-11-12
 
 ### Added
